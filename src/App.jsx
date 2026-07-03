@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import * as XLSX from "xlsx";
+import * as XLSX from "xlsx-js-style";
 import { supabase } from "./lib/supabase";
 import { loadHolidays } from "./lib/holidays";
 
@@ -3383,6 +3383,166 @@ function HQItemsPage({ hqItems, setHqItems, shippingGroups, confirmed, role, shi
   };
   const groupOptions = [...new Set(shippingGroups.map(r=>r.구분))];
 
+  // 배송표 엑셀 내보내기
+  const exportDeliveryExcel = (item) => {
+    const REGIONS = ['수도권','제주','부산','대구','서부','중부'];
+    const GROUP_KEY_MAP = { "그룹1(소매Only)":"g1","그룹2(소매+Biz)":"g2","그룹3(소매+Biz+대형)":"g3","그룹3+도매":"g_dm","그룹4":"g4" };
+    const gKey = GROUP_KEY_MAP[item.qtyGroup];
+    const active = shippingGroups.filter(r => r.active);
+    const fmtD = (k) => { if(!k) return ""; const[,m,d]=k.split("-"); return `${parseInt(m)}월 ${parseInt(d)}일`; };
+    const calcV = (row,gk) => { if(!gk||row[gk]===null) return null; return Math.round((row.기본값||0)*(typeof row[gk]==="number"?row[gk]:1)); };
+    const getVal = (구분,본부) => { const row=active.find(r=>r.구분===구분&&r.본부===본부); return row?calcV(row,gKey):null; };
+
+    const jb  = REGIONS.map(r => getVal("지역본부",r) ?? 0);
+    const psm = REGIONS.map(r => getVal("PS&M",r) ?? 0);
+    const bizRaw = REGIONS.map(r => getVal("Biz",r));
+    const biz = bizRaw.map(v => (v!==null&&v>0)?v:null);
+    const daehyung = getVal("대형","수도권") ?? 0;
+    const hasBiz = biz.some(v=>v!==null);
+
+    const jbTotal  = jb.reduce((s,v)=>s+v,0) + daehyung;
+    const psmTotal = psm.reduce((s,v)=>s+v,0);
+    const bizTotal = biz.reduce((s,v)=>s+(v||0),0);
+    const icheon   = jb[0]+jb[1]+psm[0]+psm[1]+(biz[0]||0)+daehyung;
+    const busanC   = jb[2]+psm[2]+(biz[2]||0);
+    const daeguC   = jb[3]+psm[3]+(biz[3]||0);
+    const gwangju  = jb[4]+psm[4]+(biz[4]||0);
+    const daejeon  = jb[5]+psm[5]+(biz[5]||0);
+    const dataRows = hasBiz ? 3 : 2;
+    const nm = `(본) ${item.name}`;
+
+    // ── 스타일 정의 ──
+    const thin = { style:"thin", color:{rgb:"FF000000"} };
+    const bd   = { top:thin, bottom:thin, left:thin, right:thin };
+    const C1 = "FFD9D9D9"; // 라벨행 회색
+    const C2 = "FFBFBFBF"; // 헤더 회색
+    const C3 = "FFDCE6F1"; // 데이터 연파랑
+    const mkS = (fill, bold=true, align="center", wrap=true) => ({
+      font: { bold, name:"맑은 고딕", sz:10 },
+      fill: fill ? { fgColor:{rgb:fill} } : undefined,
+      alignment: { horizontal:align, vertical:"center", wrapText:wrap },
+      border: bd,
+    });
+    const mkN = (fill, bold=true) => ({ ...mkS(fill,bold,"center",false), numFmt:"#,##0" });
+
+    const ws = {};
+    const sc = (r,c,v,s) => {
+      const addr = XLSX.utils.encode_cell({r,c});
+      const t = typeof v==="number" ? "n" : "s";
+      ws[addr] = { v: v??""  , t: (v===null||v===undefined)?"s":t, s };
+    };
+
+    // Row 0 (Excel 1): 타이틀
+    sc(0,0,"입 고 정 보",{ font:{bold:true,sz:14,name:"맑은 고딕"}, alignment:{horizontal:"center",vertical:"center"} });
+    for(let c=1;c<13;c++) sc(0,c,"",{});
+
+    // Row 1 (Excel 2): 빈 행
+    for(let c=0;c<13;c++) sc(1,c,"",{});
+
+    // Row 2 (Excel 3): 물류 주관부서
+    sc(2,0,"물류 주관부서",mkS(C1,true,"left"));
+    sc(2,1,"채널지원팀",mkS(null,false,"left"));
+    sc(2,2,"",{}); sc(2,3,"",{});
+    for(let c=4;c<13;c++) sc(2,c,"",{});
+
+    // Row 3 (Excel 4): 담당자
+    sc(3,0,"담당자 (연락처)",mkS(C1,true,"left"));
+    sc(3,1,"",mkS(null,false,"left")); sc(3,2,"",{}); sc(3,3,"",{});
+    for(let c=4;c<13;c++) sc(3,c,"",{});
+
+    // Row 4 (Excel 5): 빈 행
+    for(let c=0;c<13;c++) sc(4,c,"",{});
+
+    // Row 5 (Excel 6): 물류센터별 입고수량
+    sc(5,0,"■ 물류 센터별 입고수량",{ font:{bold:true,sz:10,name:"맑은 고딕"}, alignment:{horizontal:"left",vertical:"center"} });
+    sc(5,1,icheon,mkN(null)); sc(5,2,"",mkS(null));
+    sc(5,3,busanC,mkN(null)); sc(5,4,daeguC,mkN(null));
+    sc(5,5,gwangju,mkN(null)); sc(5,6,daejeon,mkN(null));
+    for(let c=7;c<13;c++) sc(5,c,"",{});
+
+    // Rows 6-8 (Excel 7-9): 헤더
+    sc(6,0,"구   분",mkS(C2)); sc(6,1,"수     량",mkS(C2));
+    for(let c=2;c<9;c++) sc(6,c,"",mkS(C2));
+    sc(6,9,"입고예정일",mkS(C2)); sc(6,10,"출고요청일",mkS(C2));
+    sc(6,11,"배포완료일",mkS(C2)); sc(6,12,"업체명",mkS(C2));
+
+    sc(7,0,"",mkS(C2)); sc(7,1,"이천물류",mkS(C2)); sc(7,2,"",mkS(C2));
+    sc(7,3,"부산물류",mkS(C2)); sc(7,4,"대구물류",mkS(C2));
+    sc(7,5,"광주물류",mkS(C2)); sc(7,6,"대전물류",mkS(C2));
+    sc(7,7,"이천물류",mkS(C2)); sc(7,8,"총계",mkS(C2));
+    for(let c=9;c<13;c++) sc(7,c,"",mkS(C2));
+
+    sc(8,0,"",mkS(C2)); sc(8,1,"수도권",mkS(C2)); sc(8,2,"제주",mkS(C2));
+    sc(8,3,"부산",mkS(C2)); sc(8,4,"대구",mkS(C2));
+    sc(8,5,"서부",mkS(C2)); sc(8,6,"중부",mkS(C2));
+    sc(8,7,"대형양판점",mkS(C2)); sc(8,8,"",mkS(C2));
+    for(let c=9;c<13;c++) sc(8,c,"",mkS(C2));
+
+    // 데이터 행
+    const dataRowDefs = [
+      { label: nm+"\n(지역본부_소매)", vals: jb },
+      { label: nm+"\n(PS&M_소매)",    vals: psm },
+      ...(hasBiz ? [{ label: nm+"\n(비즈)", vals: biz }] : []),
+    ];
+    dataRowDefs.forEach((row,ri) => {
+      const r = 9+ri;
+      sc(r,0,row.label,mkS(C3,true,"left"));
+      row.vals.forEach((v,ci) => sc(r,ci+1,(v!==null?v:""),mkN(C3)));
+      // 병합 컬럼들 (첫 행에만 값)
+      if(ri===0) {
+        sc(r,7,daehyung||"",mkN(C3));
+        sc(r,8,jbTotal+psmTotal+bizTotal,mkN(C3));
+        sc(r,9,fmtD(item.ingoSudo),mkS(C3,false));
+        sc(r,10,fmtD(item.assignedDate),mkS(C3,false));
+        sc(r,11,fmtD(item.assignedDate),mkS(C3,false));
+        sc(r,12,"",mkS(C3,false));
+      } else {
+        for(let c=7;c<13;c++) sc(r,c,"",mkS(C3,false));
+      }
+    });
+
+    // 푸터
+    const fs = 9+dataRows+1;
+    sc(fs,0,"■ 특이사항",{ font:{bold:true,sz:10,name:"맑은 고딕"}, alignment:{horizontal:"left"} });
+    ["1. 용도 : ","2. 상품관련 : ","3. 배포대상 : ","4. 참고사항 : "].forEach((t,i)=>
+      sc(fs+1+i,0,t,{ font:{sz:10,name:"맑은 고딕"}, alignment:{horizontal:"left"} })
+    );
+    sc(fs+6,0,' ※ 상품 발송시 "납품확인서"를 첨부하여 보내도록 제작업체에 전달 바랍니다!',{ font:{sz:10,name:"맑은 고딕"}, alignment:{horizontal:"left"} });
+    sc(fs+7,0,' ※ SKN 물류센터 입고시 입고확인증 지참 부탁드립니다.',{ font:{sz:10,name:"맑은 고딕"}, alignment:{horizontal:"left"} });
+
+    // 병합
+    ws["!merges"] = [
+      {s:{r:0,c:0},e:{r:0,c:12}},           // A1:M1 타이틀
+      {s:{r:2,c:1},e:{r:2,c:3}},            // B3:D3 채널지원팀
+      {s:{r:3,c:1},e:{r:3,c:3}},            // B4:D4 담당자값
+      {s:{r:5,c:1},e:{r:5,c:2}},            // B6:C6 이천합계
+      {s:{r:6,c:0},e:{r:8,c:0}},            // A7:A9 구분
+      {s:{r:6,c:1},e:{r:6,c:8}},            // B7:I7 수량
+      {s:{r:6,c:9},e:{r:8,c:9}},            // J7:J9 입고예정일
+      {s:{r:6,c:10},e:{r:8,c:10}},          // K7:K9 출고요청일
+      {s:{r:6,c:11},e:{r:8,c:11}},          // L7:L9 배포완료일
+      {s:{r:6,c:12},e:{r:8,c:12}},          // M7:M9 업체명
+      {s:{r:7,c:1},e:{r:7,c:2}},            // B8:C8 이천물류
+      {s:{r:7,c:8},e:{r:8,c:8}},            // I8:I9 총계
+      {s:{r:9,c:7},e:{r:9+dataRows-1,c:7}}, // H 대형 병합
+      {s:{r:9,c:8},e:{r:9+dataRows-1,c:8}}, // I 총계 병합
+      {s:{r:9,c:9},e:{r:9+dataRows-1,c:9}}, // J 입고예정일 병합
+      {s:{r:9,c:10},e:{r:9+dataRows-1,c:10}},
+      {s:{r:9,c:11},e:{r:9+dataRows-1,c:11}},
+      {s:{r:9,c:12},e:{r:9+dataRows-1,c:12}},
+    ];
+    ws["!ref"] = XLSX.utils.encode_range({s:{r:0,c:0},e:{r:fs+7,c:12}});
+    ws["!cols"] = [{wch:34},{wch:10},{wch:7},{wch:10},{wch:10},{wch:10},{wch:10},{wch:12},{wch:9},{wch:13},{wch:13},{wch:13},{wch:16}];
+    ws["!rows"] = [
+      {hpt:24},{hpt:6},{hpt:18},{hpt:18},{hpt:6},{hpt:18},
+      {hpt:18},{hpt:18},{hpt:18},
+      ...Array(dataRows).fill({hpt:48}),
+    ];
+
+    const wb = { SheetNames:["SKN입고정보"], Sheets:{"SKN입고정보":ws} };
+    XLSX.writeFile(wb, `배송표_${item.name}.xlsx`);
+  };
+
   // 탭별 아이템 필터
   const tabItems = hqItems.filter(it => {
     if (effectiveTab === "pending") {
@@ -3469,6 +3629,7 @@ function HQItemsPage({ hqItems, setHqItems, shippingGroups, confirmed, role, shi
                 <th style={{...tH, minWidth:110}}>배송공지 날짜</th>
                 <th style={{...tH, minWidth:130}}>비고</th>
                 <th style={{...tH, width:100}}>날짜 배정</th>
+                <th style={{...tH, width:90}}>배송표</th>
                 {isAdmin && <th style={{...tH, width:50}}>삭제</th>}
               </tr>
             </thead>
@@ -3539,6 +3700,16 @@ function HQItemsPage({ hqItems, setHqItems, shippingGroups, confirmed, role, shi
                     <button style={{...settingsBtn("#1d6fa4"), padding:"4px 10px", fontSize:11}}
                       onClick={()=>setReassignPopup({itemId:item.id, name:item.name})}>
                       {effectiveTab === "pending" ? "날짜 배정" : "재배정"}
+                    </button>
+                  </td>
+                  <td style={{...tD, textAlign:"center"}}>
+                    <button
+                      style={{...settingsBtn("#2e8b57"), padding:"4px 10px", fontSize:11,
+                        opacity: item.qty > 0 ? 1 : 0.4,
+                        cursor: item.qty > 0 ? "pointer" : "not-allowed"}}
+                      onClick={()=>{ if(item.qty > 0) exportDeliveryExcel(item); }}
+                      title={item.qty > 0 ? "배송표 엑셀 다운로드" : "수량 그룹을 먼저 선택하세요"}>
+                      📊 배송표
                     </button>
                   </td>
                   {isAdmin && (
