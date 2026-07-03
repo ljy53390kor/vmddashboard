@@ -1,12 +1,12 @@
-name: vmddata
+name: vmddashboard
 entrypoint: none
 description: |
-  VMD Dashboard with internal Supabase
+  vmddashboard
 service_type: javascript-npm
 properties:
 - revision: master
   ingress:
-    path: /vmddata
+    path: /vmddashboard
   npm:
     build_output: dist
   nginx:
@@ -24,29 +24,35 @@ properties:
       http {
           include       /etc/nginx/mime.types;
           default_type  application/octet-stream;
+          add_header 'Access-Control-Allow-Origin' '*';
           log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
                             '$status $body_bytes_sent "$http_referer" '
                             '"$http_user_agent" "$http_x_forwarded_for"';
           access_log  /var/log/nginx/access.log  main;
           sendfile        on;
           keepalive_timeout  65;
-
+          # reverse proxy
           server {
+              # server
               listen 8080;
-              server_name vmddata;
-              index index.html index.htm;
-
-              location /vmddata/supabase/ {
-                  proxy_pass http://vmddata-supabase-kong.diy-model.svc.cluster.local:8000/;
-                  proxy_set_header Host vmddata-supabase-kong.diy-model.svc.cluster.local;
-                  proxy_set_header X-Real-IP $remote_addr;
-              }
+              listen [::]:8080;
+              server_name vmddashboard;
+              # location
+              index  index.html index.htm;
 
               location /assets {
                   alias /usr/share/nginx/html/assets;
               }
 
-              location /vmddata {
+              location /vmddashboard/supabase-api/ {
+                  proxy_pass https://outbound-api-gw.playground/ytevgwijapjhwifqiaco.supabase.co/;
+                  proxy_set_header Host ytevgwijapjhwifqiaco.supabase.co;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  proxy_ssl_verify off;
+              }
+
+              location /vmddashboard {
                   alias /usr/share/nginx/html;
                   try_files $uri $uri/ /index.html;
               }
