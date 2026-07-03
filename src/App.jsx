@@ -3,6 +3,16 @@ import * as XLSX from "xlsx";
 import { supabase } from "./lib/supabase";
 import { loadHolidays } from "./lib/holidays";
 
+const isPlayground = typeof window !== 'undefined' &&
+  (window.location.hostname.includes('playground.idcube.sktelecom.com') ||
+   window.location.hostname.includes('playground.sktelecom.com'));
+
+const PLAYGROUND_ACCOUNTS = {
+  'admin':    { password: 'Vmd@Admin1', role: 'admin',    name: '관리자' },
+  'skn':      { password: 'Vmd@Skn001', role: 'skn',      name: 'SKN담당자' },
+  'regional': { password: 'Vmd@Local1', role: 'regional', name: '지역담당자' },
+};
+
 const C = {
   bg0:         "var(--c-bg0)",
   bg1:         "var(--c-bg1)",
@@ -246,6 +256,12 @@ export default function App() {
   const [shippingNextColId, setShippingNextColId] = useState(1);
 
   useEffect(() => {
+    if (isPlayground) {
+      const saved = localStorage.getItem('pg-user');
+      if (saved) setUser(JSON.parse(saved));
+      setAuthLoading(false);
+      return;
+    }
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session) fetchProfile(session.user.id);
       else setAuthLoading(false);
@@ -257,6 +273,15 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []);
 
+  const handlePlaygroundLogin = (id, pw) => {
+    const account = PLAYGROUND_ACCOUNTS[id];
+    if (!account || account.password !== pw) return false;
+    const userData = { id, role: account.role, name: account.name };
+    localStorage.setItem('pg-user', JSON.stringify(userData));
+    setUser(userData);
+    return true;
+  };
+
   const fetchProfile = async (userId) => {
     const { data } = await supabase.from('members').select('*').eq('user_id', userId).single();
     if (data) setUser({ id: data.employee_id, role: data.role, name: data.name });
@@ -265,6 +290,11 @@ export default function App() {
 
   const handleLogout = async () => {
     setUpdatedDates({});
+    if (isPlayground) {
+      localStorage.removeItem('pg-user');
+      setUser(null);
+      return;
+    }
     await supabase.from('app_data').upsert({ key: 'updated_dates', value: {}, updated_at: new Date().toISOString() });
     await supabase.auth.signOut();
     setUser(null);
@@ -327,7 +357,7 @@ export default function App() {
       <div style={{ fontSize:16, color:"#888" }}>불러오는 중...</div>
     </div>
   );
-  if (!user) return <AuthPage theme={theme} onToggle={toggleTheme} />;
+  if (!user) return <AuthPage theme={theme} onToggle={toggleTheme} onPlaygroundLogin={isPlayground ? handlePlaygroundLogin : null} />;
   return (
     <>
       <Dashboard
@@ -468,7 +498,7 @@ function ThemeToggle({ theme, onToggle, style={} }) {
   );
 }
 
-function AuthPage({ theme, onToggle }) {
+function AuthPage({ theme, onToggle, onPlaygroundLogin }) {
   const [tab, setTab] = useState("login");
 
   return (
@@ -488,15 +518,15 @@ function AuthPage({ theme, onToggle }) {
         <div style={styles.loginTitle}>VMD 배송 관리</div>
         <div style={styles.loginSub}>전국 SK텔레콤 매장 배송 플랫폼</div>
 
-        {tab !== "verify" && (
+        {tab !== "verify" && !onPlaygroundLogin && (
           <div style={authStyles.tabRow}>
             <button style={{...authStyles.tab, ...(tab==="login"?authStyles.tabActive:{})}} onClick={()=>setTab("login")}>로그인</button>
             <button style={{...authStyles.tab, ...(tab==="signup"?authStyles.tabActive:{})}} onClick={()=>setTab("signup")}>회원가입</button>
           </div>
         )}
 
-        {tab === "login"  && <LoginForm />}
-        {tab === "signup" && <SignupForm onDone={()=>setTab("verify")} />}
+        {tab === "login"  && <LoginForm onPlaygroundLogin={onPlaygroundLogin} />}
+        {tab === "signup" && !onPlaygroundLogin && <SignupForm onDone={()=>setTab("verify")} />}
         {tab === "verify" && <VerifyNotice onBack={()=>setTab("login")} />}
 
         <div style={{marginTop:20, fontSize:11, color:"rgba(148,163,184,0.4)", letterSpacing:0.5}}>VMD DELIVERY PLATFORM © SK Telecom</div>
@@ -505,15 +535,21 @@ function AuthPage({ theme, onToggle }) {
   );
 }
 
-function LoginForm() {
+function LoginForm({ onPlaygroundLogin }) {
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
 
   const handleLogin = async () => {
-    if (!email || !pw) { setErr("이메일과 비밀번호를 입력하세요."); return; }
+    if (!email || !pw) { setErr("아이디와 비밀번호를 입력하세요."); return; }
     setLoading(true); setErr("");
+    if (onPlaygroundLogin) {
+      const ok = onPlaygroundLogin(email.trim(), pw);
+      if (!ok) setErr("아이디 또는 비밀번호가 올바르지 않습니다.");
+      setLoading(false);
+      return;
+    }
     const { error } = await supabase.auth.signInWithPassword({ email, password: pw });
     if (error) {
       if (error.message.includes("Email not confirmed")) setErr("이메일 인증이 완료되지 않았습니다. 메일함을 확인해주세요.");
@@ -525,10 +561,10 @@ function LoginForm() {
   return (
     <>
       <div style={styles.loginField}>
-        <label style={styles.loginLabel}>이메일</label>
-        <input style={styles.loginInput} type="email" value={email}
+        <label style={styles.loginLabel}>{onPlaygroundLogin ? "아이디" : "이메일"}</label>
+        <input style={styles.loginInput} type={onPlaygroundLogin ? "text" : "email"} value={email}
           onChange={e=>{setEmail(e.target.value);setErr("");}}
-          onKeyDown={e=>e.key==="Enter"&&handleLogin()} placeholder="이메일 입력" />
+          onKeyDown={e=>e.key==="Enter"&&handleLogin()} placeholder={onPlaygroundLogin ? "아이디 입력" : "이메일 입력"} />
       </div>
       <div style={styles.loginField}>
         <label style={styles.loginLabel}>비밀번호</label>
