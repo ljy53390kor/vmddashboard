@@ -33,15 +33,18 @@ properties:
           keepalive_timeout  65;
           # reverse proxy
           server {
-              # server
               listen 8080;
               listen [::]:8080;
               server_name vmddashboard;
-              # location
-              index  index.html index.htm;
+              root /usr/share/nginx/html;
+              index index.html index.htm;
 
-              location /assets {
-                  alias /usr/share/nginx/html/assets;
+              # 내부 Supabase API
+              location /vmddashboard/supabase-api/ {
+                  proxy_pass http://vmddata-supabase-kong.diy-model.svc.cluster.local:8000/;
+                  proxy_set_header Host vmddata-supabase-kong.diy-model.svc.cluster.local;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
               }
 
               # Supabase Meta API
@@ -56,22 +59,7 @@ properties:
                   proxy_set_header Host vmddata-supabase-auth.diy-model.svc.cluster.local;
               }
 
-              # Kong Admin API (anon key 조회용)
-              location /vmddashboard/kong-admin/ {
-                  proxy_pass http://vmddata-supabase-kong.diy-model.svc.cluster.local:8001/;
-                  proxy_set_header Host vmddata-supabase-kong.diy-model.svc.cluster.local;
-              }
-
-              # 내부 Supabase (vmddata 클러스터 서비스)
-              location /vmddashboard/supabase-api/ {
-                  proxy_pass http://vmddata-supabase-kong.diy-model.svc.cluster.local:8000/;
-                  proxy_set_header Host vmddata-supabase-kong.diy-model.svc.cluster.local;
-                  proxy_set_header X-Real-IP $remote_addr;
-                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-              }
-
               location /vmddashboard {
-                  alias /usr/share/nginx/html;
                   try_files $uri $uri/ /index.html;
               }
           }
