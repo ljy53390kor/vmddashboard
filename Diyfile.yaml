@@ -1,0 +1,48 @@
+name: vmddashboard
+entrypoint: none
+description: |
+  vmddashboard
+service_type: javascript-npm
+properties:
+- revision: master
+  ingress:
+    path: /vmddashboard
+  npm:
+    build_output: dist
+  nginx:
+    nginx.conf: |
+      user  nginx;
+      worker_processes  auto;
+
+      error_log  /var/log/nginx/error.log warn;
+      pid        /var/run/nginx.pid;
+
+      events {
+          worker_connections  1024;
+      }
+
+      http {
+          include       /etc/nginx/mime.types;
+          default_type  application/octet-stream;
+          add_header 'Access-Control-Allow-Origin' '*';
+          log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
+                            '$status $body_bytes_sent "$http_referer" '
+                            '"$http_user_agent" "$http_x_forwarded_for"';
+          access_log  /var/log/nginx/access.log  main;
+          sendfile        on;
+          keepalive_timeout  65;
+          # reverse proxy
+          server {
+              # server
+              listen 8080;
+              listen [::]:8080;
+              server_name vmddashboard;
+              # location
+              index  index.html index.htm;
+
+              location /vmddashboard {
+                  alias /usr/share/nginx/html;
+                  try_files $uri $uri/ /index.html;
+              }
+          }
+      }
