@@ -44,6 +44,12 @@ properties:
                   alias /usr/share/nginx/html/assets;
               }
 
+              # Supabase Studio (anon key 확인용)
+              location /vmddashboard/studio/ {
+                  proxy_pass http://vmddata-supabase-studio.diy-model.svc.cluster.local:3000/;
+                  proxy_set_header Host vmddata-supabase-studio.diy-model.svc.cluster.local;
+              }
+
               # 내부 Supabase (vmddata 클러스터 서비스)
               location /vmddashboard/supabase-api/ {
                   proxy_pass http://vmddata-supabase-kong.diy-model.svc.cluster.local:8000/;
