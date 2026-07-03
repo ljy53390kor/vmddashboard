@@ -4,7 +4,7 @@ description: |
   vmddashboard
 service_type: javascript-npm
 properties:
-- revision: main
+- revision: master
   ingress:
     path: /vmddashboard
   npm:
