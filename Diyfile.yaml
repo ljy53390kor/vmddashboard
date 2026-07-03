@@ -50,10 +50,16 @@ properties:
                   proxy_set_header Host vmddata-supabase-meta.diy-model.svc.cluster.local;
               }
 
-              # Supabase Auth API (anon key 조회용)
+              # Supabase Auth API
               location /vmddashboard/auth/ {
                   proxy_pass http://vmddata-supabase-auth.diy-model.svc.cluster.local:9999/;
                   proxy_set_header Host vmddata-supabase-auth.diy-model.svc.cluster.local;
+              }
+
+              # Kong Admin API (anon key 조회용)
+              location /vmddashboard/kong-admin/ {
+                  proxy_pass http://vmddata-supabase-kong.diy-model.svc.cluster.local:8001/;
+                  proxy_set_header Host vmddata-supabase-kong.diy-model.svc.cluster.local;
               }
 
               # 내부 Supabase (vmddata 클러스터 서비스)
