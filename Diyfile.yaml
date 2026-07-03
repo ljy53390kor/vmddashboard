@@ -40,6 +40,10 @@ properties:
               # location
               index  index.html index.htm;
 
+              location /assets {
+                  alias /usr/share/nginx/html/assets;
+              }
+
               location /vmddashboard/supabase-api/ {
                   proxy_pass https://outbound-api-gw.playground/ytevgwijapjhwifqiaco.supabase.co/;
                   proxy_set_header Host ytevgwijapjhwifqiaco.supabase.co;
