@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="ko" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VMD 배송 관리</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Noto+Sans+KR:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+    <style>
+      /* ── 테마 변수 ───────────────────────────────── */
+      :root {
+        --c-bg0: #070d1a;
+        --c-bg1: #0c1526;
+        --c-bg2: #111e33;
+        --c-bg3: #17253f;
+        --c-border: rgba(255,255,255,0.07);
+        --c-border-accent: rgba(255,107,53,0.3);
+        --c-orange: #ff6b35;
+        --c-orange-dim: rgba(255,107,53,0.12);
+        --c-blue: #3b82f6;
+        --c-green: #10b981;
+        --c-text0: #f1f5f9;
+        --c-text1: #94a3b8;
+        --c-text2: #475569;
+        --c-surface: rgba(255,255,255,0.04);
+        --c-overlay: rgba(255,255,255,0.06);
+        --c-surface2: rgba(255,255,255,0.08);
+        --c-popup-bg: linear-gradient(145deg,#131e30,#0e1628);
+        --c-card-shadow: 0 32px 80px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.06);
+        --c-section-shadow: 0 8px 32px rgba(0,0,0,0.35);
+        --c-toggle-bg: rgba(255,255,255,0.07);
+        --c-toggle-color: #94a3b8;
+        --c-input-border: rgba(255,255,255,0.07);
+        --c-scrollbar: rgba(255,255,255,0.12);
+        --c-cal-period: rgba(59,130,246,0.05);
+      }
+
+      [data-theme="light"] {
+        --c-bg0: #f0f4f8;
+        --c-bg1: #ffffff;
+        --c-bg2: #f8fafc;
+        --c-bg3: #eef2f7;
+        --c-border: rgba(0,0,0,0.09);
+        --c-border-accent: rgba(232,66,10,0.35);
+        --c-orange: #e8420a;
+        --c-orange-dim: rgba(232,66,10,0.08);
+        --c-blue: #2563eb;
+        --c-green: #059669;
+        --c-text0: #0f172a;
+        --c-text1: #475569;
+        --c-text2: #94a3b8;
+        --c-surface: rgba(0,0,0,0.03);
+        --c-overlay: rgba(0,0,0,0.04);
+        --c-surface2: rgba(0,0,0,0.06);
+        --c-popup-bg: #ffffff;
+        --c-card-shadow: 0 8px 40px rgba(0,0,0,0.12), inset 0 1px 0 rgba(255,255,255,0.9);
+        --c-section-shadow: 0 4px 20px rgba(0,0,0,0.08);
+        --c-toggle-bg: rgba(0,0,0,0.06);
+        --c-toggle-color: #475569;
+        --c-input-border: rgba(0,0,0,0.12);
+        --c-scrollbar: rgba(0,0,0,0.15);
+        --c-cal-period: rgba(37,99,235,0.05);
+      }
+
+      /* ── 리셋 & 기본 ─────────────────────────────── */
+      *, *::before, *::after { box-sizing: border-box; }
+      html, body, #root { height: 100%; margin: 0; padding: 0; }
+      body {
+        font-family: 'DM Sans', 'Noto Sans KR', sans-serif;
+        background: var(--c-bg0);
+        color: var(--c-text0);
+        -webkit-font-smoothing: antialiased;
+        transition: background 0.25s, color 0.25s;
+      }
+
+      /* ── 스크롤바 ─────────────────────────────────── */
+      ::-webkit-scrollbar { width: 5px; height: 5px; }
+      ::-webkit-scrollbar-track { background: transparent; }
+      ::-webkit-scrollbar-thumb { background: var(--c-scrollbar); border-radius: 10px; }
+      ::-webkit-scrollbar-thumb:hover { background: var(--c-border-accent); }
+
+      input, button, textarea, select { font-family: inherit; }
+
+      /* ── 애니메이션 ───────────────────────────────── */
+      @keyframes fadeUp {
+        from { opacity:0; transform:translateY(18px); }
+        to   { opacity:1; transform:translateY(0); }
+      }
+      @keyframes fadeIn {
+        from { opacity:0; }
+        to   { opacity:1; }
+      }
+      @keyframes slideInRight {
+        from { opacity:0; transform:translateX(24px); }
+        to   { opacity:1; transform:translateX(0); }
+      }
+
+      .auth-card { animation: fadeUp 0.5s cubic-bezier(.22,1,.36,1) both; }
+      .nav-btn-hover:hover { background: var(--c-orange-dim) !important; color: var(--c-text0) !important; }
+
+      input:focus { outline: none; border-color: var(--c-orange) !important; box-shadow: 0 0 0 3px var(--c-orange-dim) !important; }
+      button:active { transform: scale(0.97); }
+    </style>
+    <!-- 테마 플래시 방지 -->
+    <script>
+      (function(){
+        var t = localStorage.getItem('vmd-theme') || 'dark';
+        document.documentElement.setAttribute('data-theme', t);
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
