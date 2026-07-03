@@ -2685,10 +2685,25 @@ function ShippingGroupsSection({ shippingGroups, setShippingGroups, table1, setT
         const ws = wb.Sheets[wb.SheetNames[0]];
         const rows = XLSX.utils.sheet_to_json(ws, {header:1});
         // 집계: {구분_지역: count}
+        // 헤더 기반 열 인덱스 자동 감지
+        const header = (rows[0] || []).map(h => String(h||"").trim());
+        const colIdx = (name) => { const i = header.indexOf(name); return i >= 0 ? i : -1; };
+        const mktgCol      = colIdx("마케팅본부");
+        const sidoCol      = colIdx("시도명");
+        const storeCodeCol = colIdx("매장코드");
+        const storeNameCol = colIdx("매장명");
+        const agentCodeCol = colIdx("대리점코드");
+        const agentNameCol = colIdx("대리점명");
+
+        if (mktgCol < 0 || sidoCol < 0) {
+          setUploadStatus({type:"error", msg:"열 이름을 찾을 수 없습니다. '마케팅본부', '시도명' 열이 있는지 확인해주세요."});
+          return;
+        }
+
         const counts = {};
         rows.slice(1).forEach(row => {
-          const mktg = String(row[1]||"");
-          const sido  = String(row[7]||"");
+          const mktg = String(row[mktgCol]||"");
+          const sido  = String(row[sidoCol]||"");
           const region = sidoToRegion(sido);
           if (!region) return;
           const 구분 = mktg.includes('유통사업부') ? 'PS&M' : '지역본부';
@@ -2725,13 +2740,13 @@ function ShippingGroupsSection({ shippingGroups, setShippingGroups, table1, setT
         newRows.push({ id:id++, 구분:"택배배송", 본부:"-", 소매매장:null, adj102:null, 매장비중:null, biz:null, 대형유통:null, 도매:0 });
         setTable1(newRows);
         // 개별 매장 목록 저장 (GTM 누락 매장 비교용)
-        const storeListParsed = rows.slice(1).filter(r=>r[5]).map(r=>({
-          매장코드: String(r[5]||"").trim(),
-          매장명: String(r[4]||""),
-          대리점코드: String(r[2]||"").trim(),
-          대리점명: String(r[3]||""),
-          구분: String(r[1]||"").includes('유통사업부') ? 'PS&M' : '지역본부',
-          본부: sidoToRegion(String(r[7]||"")) || "-",
+        const storeListParsed = rows.slice(1).filter(r => storeCodeCol >= 0 ? r[storeCodeCol] : r[5]).map(r=>({
+          매장코드: String(storeCodeCol >= 0 ? r[storeCodeCol] : r[5]||"").trim(),
+          매장명: String(storeNameCol >= 0 ? r[storeNameCol] : r[4]||""),
+          대리점코드: String(agentCodeCol >= 0 ? r[agentCodeCol] : r[2]||"").trim(),
+          대리점명: String(agentNameCol >= 0 ? r[agentNameCol] : r[3]||""),
+          구분: String(r[mktgCol]||"").includes('유통사업부') ? 'PS&M' : '지역본부',
+          본부: sidoToRegion(String(r[sidoCol]||"")) || "-",
         }));
         if (setStoreList) setStoreList(storeListParsed);
         setStep("upload");
@@ -2814,7 +2829,7 @@ function ShippingGroupsSection({ shippingGroups, setShippingGroups, table1, setT
 
   // 표2
   const GCOLS = ["g1","g2","g3","g_dm","g4"];
-  const GLABELS = ["그룹1","그룹2","그룹3","그룹3+도매","그룹4"];
+  const GLABELS = ["그룹1(소매Only)","그룹2(소매+Biz)","그룹3(소매+Biz+대형)","그룹3+도매","그룹4"];
   const MULTIPLIERS = [2,3];
   // 도매포함 그룹 값 계산 (기본값 + 도매값)
   const calcDmVal = (row) => {
@@ -2904,8 +2919,15 @@ function ShippingGroupsSection({ shippingGroups, setShippingGroups, table1, setT
                           <td style={{...tD,textAlign:"center",fontWeight:600}}>
                             {row.소매매장!==null ? row.소매매장 : <span style={{color:"#ccc"}}>-</span>}
                           </td>
-                          <td style={{...tD,textAlign:"center",color:"#1d6fa4",fontWeight:700}}>
-                            {row.adj102!==null ? `=${row.소매매장}*102% → ${row.adj102}` : <span style={{color:"#ccc"}}>-</span>}
+                          <td style={{...tD,textAlign:"center"}}>
+                            {row.adj102!==null ? (
+                              <div style={{display:"flex",alignItems:"center",gap:4,justifyContent:"center"}}>
+                                <span style={{color:"#aaa",fontSize:11}}>={row.소매매장}×102%→</span>
+                                <input type="number" min="0" style={{...numInput,width:60,color:"#1d6fa4",fontWeight:700}}
+                                  value={row.adj102||""}
+                                  onChange={e=>updateT1(row.id,"adj102",parseInt(e.target.value)||0)} />
+                              </div>
+                            ) : <span style={{color:"#ccc"}}>-</span>}
                           </td>
                           <td style={{...tD,textAlign:"center"}}>
                             {row.매장비중!==null ? row.매장비중 : <span style={{color:"#ccc"}}>-</span>}
@@ -2997,8 +3019,8 @@ function ShippingGroupsSection({ shippingGroups, setShippingGroups, table1, setT
                   <th style={{...tH,width:60}}>본부</th>
                   <th style={{...tH,width:90}}>기본 값</th>
                   {/* 그룹1~3: 라벨만 */}
-                  {["그룹1","그룹2","그룹3"].map(g=>(
-                    <th key={g} style={tH}>{g}</th>
+                  {[["그룹1","그룹1(소매Only)"],["그룹2","그룹2(소매+Biz)"],["그룹3","그룹3(소매+Biz+대형)"]].map(([k,label])=>(
+                    <th key={k} style={tH}>{label}</th>
                   ))}
                   {/* 그룹3+도매 */}
                   <th style={{...tH, background:"#f0ecff", color:"#7b52d9"}}>그룹3+도매</th>
@@ -3573,11 +3595,11 @@ function HQItemsPage({ hqItems, setHqItems, shippingGroups, confirmed, role, shi
         const calcDm2 = (row) => row.g_dm!==null ? (row.기본값||0)+(row.도매값||0) : null;
         const activeRows = shippingGroups.filter(r=>r.active);
         const groups = [
-          { label:"그룹1", key:"g1",
+          { label:"그룹1(소매Only)", key:"g1",
             total: activeRows.filter(r=>r.g1!==null).reduce((s,r)=>s+(calcV2(r,"g1")||0),0) },
-          { label:"그룹2", key:"g2",
+          { label:"그룹2(소매+Biz)", key:"g2",
             total: activeRows.filter(r=>r.g2!==null).reduce((s,r)=>s+(calcV2(r,"g2")||0),0) },
-          { label:"그룹3", key:"g3",
+          { label:"그룹3(소매+Biz+대형)", key:"g3",
             total: activeRows.filter(r=>r.g3!==null).reduce((s,r)=>s+(calcV2(r,"g3")||0),0) },
           { label:"그룹3+도매", key:"g_dm",
             total: activeRows.filter(r=>r.g_dm!==null).reduce((s,r)=>s+(calcDm2(r)||0),0) },
