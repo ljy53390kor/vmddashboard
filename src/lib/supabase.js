@@ -12,8 +12,7 @@ const isVmddashboard = isPG && pathname.startsWith('/vmddashboard');
 const EXTERNAL_URL = 'https://ytevgwijapjhwifqiaco.supabase.co';
 const EXTERNAL_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl0ZXZnd2lqYXBqaHdpZnFpYWNvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk3NzUwMzgsImV4cCI6MjA5NTM1MTAzOH0.6YDJz3XoUqYee4nGRPG0OdA3n8zEdQSeiZwajY9dq1o';
 
-// 내부 Supabase anon key — Portal > vmddata 앱 설정에서 확인 후 입력
-const INTERNAL_KEY = '';
+const INTERNAL_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNTE2MjM5MDIyLCJleHAiOjE4OTM0NTYwMDB9.jQSaJ1e7ETayvxn2I0P1nFVCsTl2Sa-Nk4JaEGCcOtA';
 
 let supabaseUrl, supabaseAnonKey;
 if (isVmddashboard) {
