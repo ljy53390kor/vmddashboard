@@ -1,7 +1,7 @@
 name: vmddata
 entrypoint: none
 description: |
-  VMD 배송 관리 (내부망 Supabase)
+  VMD Dashboard
 service_type: javascript-npm
 properties:
 - revision: master
@@ -31,30 +31,11 @@ properties:
           access_log  /var/log/nginx/access.log  main;
           sendfile        on;
           keepalive_timeout  65;
-
           server {
               listen 8080;
               listen [::]:8080;
               server_name vmddata;
               index  index.html index.htm;
-
-              # 내부 Supabase API (Kong 게이트웨이)
-              location /vmddata/supabase/ {
-                  proxy_pass http://vmddata-supabase-kong.diy-model.svc.cluster.local:8000/;
-                  proxy_set_header Host vmddata-supabase-kong.diy-model.svc.cluster.local;
-                  proxy_set_header X-Real-IP $remote_addr;
-                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-                  proxy_http_version 1.1;
-                  proxy_set_header Upgrade $http_upgrade;
-                  proxy_set_header Connection "upgrade";
-              }
-
-              # Supabase Studio (anon key 확인용)
-              location /vmddata/studio/ {
-                  proxy_pass http://vmddata-supabase-studio.diy-model.svc.cluster.local:3000/;
-                  proxy_set_header Host vmddata-supabase-studio.diy-model.svc.cluster.local;
-                  proxy_http_version 1.1;
-              }
 
               location /assets {
                   alias /usr/share/nginx/html/assets;

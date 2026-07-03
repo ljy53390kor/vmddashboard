@@ -12,16 +12,13 @@ const isVmddashboard = isPG && pathname.startsWith('/vmddashboard');
 const EXTERNAL_URL = 'https://ytevgwijapjhwifqiaco.supabase.co';
 const EXTERNAL_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl0ZXZnd2lqYXBqaHdpZnFpYWNvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk3NzUwMzgsImV4cCI6MjA5NTM1MTAzOH0.6YDJz3XoUqYee4nGRPG0OdA3n8zEdQSeiZwajY9dq1o';
 
-// 내부 Supabase anon key — 배포 후 Studio(/vmddata/studio/)에서 확인하여 입력
-const VMDDATA_KEY = '';
+// 내부 Supabase anon key — Portal > vmddata 앱 설정에서 확인 후 입력
+const INTERNAL_KEY = '';
 
 let supabaseUrl, supabaseAnonKey;
-if (isVmddata) {
-  supabaseUrl     = `${window.location.origin}/vmddata/supabase`;
-  supabaseAnonKey = VMDDATA_KEY;
-} else if (isVmddashboard) {
+if (isVmddashboard) {
   supabaseUrl     = `${window.location.origin}/vmddashboard/supabase-api`;
-  supabaseAnonKey = EXTERNAL_KEY;
+  supabaseAnonKey = INTERNAL_KEY || EXTERNAL_KEY;
 } else {
   supabaseUrl     = EXTERNAL_URL;
   supabaseAnonKey = EXTERNAL_KEY;
