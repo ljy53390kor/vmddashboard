@@ -3,10 +3,14 @@ $ErrorActionPreference = "Stop"
 
 Write-Host "vmddata deploy start..." -ForegroundColor Cyan
 
+$vmddataUrl = "https://gitlab.tde.sktelecom.com/PGPRIVATE/playground-vmddata-app.git"
 $remotes = git remote
 if ($remotes -notcontains "vmddata") {
-    git remote add vmddata https://gitlab.tde.sktelecom.com/PGPRIVATE/playground-vmddata.git
+    git remote add vmddata $vmddataUrl
     Write-Host "vmddata remote added" -ForegroundColor Green
+} else {
+    git remote set-url vmddata $vmddataUrl
+    Write-Host "vmddata remote updated" -ForegroundColor Green
 }
 
 Copy-Item Diyfile.yaml Diyfile.vmddashboard.yaml -Force
@@ -27,5 +31,5 @@ git push origin
 
 Write-Host ""
 Write-Host "Done! After build, access Studio at:" -ForegroundColor Green
-Write-Host "https://playground.idcube.sktelecom.com/vmddata/studio/" -ForegroundColor Cyan
+Write-Host "https://playground.idcube.sktelecom.com/vmddata-app/studio/" -ForegroundColor Cyan
 Write-Host "Settings > API > Project API keys > anon key" -ForegroundColor Yellow
