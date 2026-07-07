@@ -4315,9 +4315,17 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
           if (isAdmin) {
             // 관리자는 여러 본부가 섞인 전체 파일을 한 번에 올릴 수 있으므로 전체 교체
             setData(parsed);
+            // 데이터 전체가 바뀌었으므로 기존 제출 현황(전체 목록/누락 매장)도 모두 초기화
+            setSubmissions({});
           } else {
             // 일반 계정은 선택한 본부 소속 데이터만 교체하고 다른 본부 데이터는 그대로 유지
             setData(prev => [...prev.filter(r=>r.본부 !== uploadRegion), ...parsed]);
+            // 그 본부의 데이터가 바뀌었으므로 그 본부의 제출 현황만 초기화
+            setSubmissions(prev => {
+              const list = { ...(prev.list||{}) }; delete list[uploadRegion];
+              const missing = { ...(prev.missing||{}) }; delete missing[uploadRegion];
+              return { list, missing };
+            });
           }
           setUploadStatus({type:"success", msg:`${isAdmin ? "전체" : uploadRegion} ${parsed.length}개 항목 로드 완료`});
           setUploadRegion(""); // 다음 업로드 때 다시 본부를 선택하도록 초기화
@@ -4443,18 +4451,15 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
             신규수량: (r[11]!==undefined && r[11]!==null && r[11]!=="") ? r[11] : r[10], // 수량 열이 비어있으면 이전수량을 그대로 사용
           });
         });
+        // 업로드 파일에 포함된 본부(들)는 기존 pool을 통째로 비우고 이 파일 내용으로만 다시 채움
+        // (매장코드 매칭 갱신이 아니라, 그 본부 소속 전체를 새 목록으로 교체)
+        const regionsInFile = new Set([...updatesByCode.values()].map(f=>f.본부));
         setData(prev => {
-          const next = prev.map(row => updatesByCode.has(row.매장코드) ? { ...row, ...updatesByCode.get(row.매장코드) } : row);
-          let nextId = next.reduce((m,r)=>Math.max(m, r.id||0), 0);
-          updatesByCode.forEach((fields, code) => {
-            if (!next.some(r=>r.매장코드===code)) {
-              nextId += 1;
-              next.push({ id: nextId, ...fields });
-            }
-          });
-          return next;
+          const kept = prev.filter(r => !regionsInFile.has(r.본부));
+          const newRows = [...updatesByCode.values()].map((fields,i) => ({ id: Date.now()+i, ...fields }));
+          return [...kept, ...newRows];
         });
-        setReuploadStatus({type:"success", msg:`${updatesByCode.size}개 매장 반영 완료`});
+        setReuploadStatus({type:"success", msg:`${[...regionsInFile].join(", ")} ${updatesByCode.size}개 매장으로 교체 완료`});
       } catch(err) {
         setReuploadStatus({type:"error", msg:"오류: "+err.message});
       }
