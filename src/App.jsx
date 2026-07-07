@@ -3,7 +3,6 @@ import * as XLSX from "xlsx-js-style";
 import { supabase } from "./lib/supabase";
 import { loadHolidays } from "./lib/holidays";
 
-
 const C = {
   bg0:         "var(--c-bg0)",
   bg1:         "var(--c-bg1)",
@@ -238,6 +237,21 @@ export default function App() {
   const [hqItems, setHqItems] = useState([]);
   // ── GTM 취합 ────────────────────────────────────────────────────────────
   const [gtmWideColorData, setGtmWideColorData] = useState([]);
+  const [gtmHangingData, setGtmHangingData] = useState([]);
+  // 본부별 제출 현황: { widecolor: { [본부]: {submitted, submittedAt} }, hanging: {...} }
+  const [gtmSubmissions, setGtmSubmissions] = useState({});
+  // 와이드컬러 누락 매장 비교용 — 신설 매장 리스트 (전체 매장리스트가 아님)
+  const [gtmNewStoreList, setGtmNewStoreList] = useState([]);
+  // 라지그래픽 확정된 라운드 히스토리: [{id,name,label,data,locked,finalizedAt}] — S25/폴더블7/아이폰16/S26은 기본 제공(업로드 가능), 이후 "최종 확정"으로 추가되는 라운드는 locked:true
+  const [gtmLargeGfxRounds, setGtmLargeGfxRounds] = useState(
+    ["아이폰16","S25","폴더블7","아이폰17","S26"].map(name => ({ id:name, name, label:`${name} 선정매장`, data:[], locked:false, finalizedAt:null }))
+  );
+  // 라지그래픽 "신규 라지그래픽 선정" 작업용 초안(수정/삭제 가능, 최종 확정 전까지)
+  const [gtmLargeGfxDraft, setGtmLargeGfxDraft] = useState([]);
+  // 라지그래픽 매장별 전면사진: { [매장코드]: [{id,name,dataUrl}] } — 라운드 공통
+  const [gtmLargeGfxPhotos, setGtmLargeGfxPhotos] = useState({});
+  // 라지그래픽 탭별 O/X 비교 라운드 수동 선택: { [탭이름]: [name|null, name|null, name|null] } — 없으면 자동(최신 3개)
+  const [gtmLargeGfxCompareOverrides, setGtmLargeGfxCompareOverrides] = useState({});
   // 설정에서 업로드한 매장 개별 목록 (누락 매장 비교용)
   const [storeList, setStoreList] = useState([]); // [{매장코드, 매장명, 대리점코드, 구분, 본부}]
   // ── 배송 수량 설정 표1/표2 상태 (메뉴 전환 시 유지) ─────────────────────
@@ -297,6 +311,31 @@ export default function App() {
         if (m.shipping_step)        setShippingStep(m.shipping_step);
         if (m.shipping_custom_cols) setShippingCustomCols(m.shipping_custom_cols);
         if (m.shipping_next_col_id !== undefined) setShippingNextColId(m.shipping_next_col_id);
+        if (m.gtm_widecolor_data)   setGtmWideColorData(m.gtm_widecolor_data);
+        if (m.gtm_hanging_data)     setGtmHangingData(m.gtm_hanging_data);
+        if (m.gtm_submissions)      setGtmSubmissions(m.gtm_submissions);
+        if (m.gtm_new_store_list)   setGtmNewStoreList(m.gtm_new_store_list);
+        // gtm_largegfx_rounds/draft는 예전 버전(객체 형태)으로 저장된 값이 남아있을 수 있어 배열인 경우만 반영
+        if (Array.isArray(m.gtm_largegfx_rounds)) {
+          const filtered = m.gtm_largegfx_rounds.filter(r => r && typeof r.name==='string' && Array.isArray(r.data));
+          // 이름 중복(이전 마이그레이션 버그로 생긴 중복 탭)은 데이터가 더 많은 쪽만 남기고 정리
+          const byName = new Map();
+          filtered.forEach(r => {
+            const prev = byName.get(r.name);
+            if (!prev || r.data.length > prev.data.length) byName.set(r.name, r);
+          });
+          let validRounds = filtered.map(r=>r.name).filter((n,i,arr)=>arr.indexOf(n)===i).map(n=>byName.get(n));
+          // 기본 라운드 5개는 항상 정해진 시간순(오래된→최신)으로 고정 — 저장된 순서가 꼬여있어도 여기서 바로잡음.
+          // 이후 "최종 확정"으로 추가된 라운드는 기존 상대 순서 그대로 뒤에 붙임.
+          const CANONICAL_ORDER = ["아이폰16","S25","폴더블7","아이폰17","S26"];
+          const known = CANONICAL_ORDER.map(n => validRounds.find(r=>r.name===n)).filter(Boolean);
+          const extra = validRounds.filter(r => !CANONICAL_ORDER.includes(r.name));
+          validRounds = [...known, ...extra];
+          if (validRounds.length > 0) setGtmLargeGfxRounds(validRounds);
+        }
+        if (Array.isArray(m.gtm_largegfx_draft)) setGtmLargeGfxDraft(m.gtm_largegfx_draft);
+        if (m.gtm_largegfx_photos)  setGtmLargeGfxPhotos(m.gtm_largegfx_photos);
+        if (m.gtm_largegfx_compare) setGtmLargeGfxCompareOverrides(m.gtm_largegfx_compare);
       }
       setAppDataLoaded(true);
     })();
@@ -323,6 +362,14 @@ export default function App() {
   useEffect(() => { if (appDataLoaded) saveKey('shipping_step', shippingStep); }, [shippingStep, appDataLoaded]);
   useEffect(() => { if (appDataLoaded) saveKey('shipping_custom_cols', shippingCustomCols); }, [shippingCustomCols, appDataLoaded]);
   useEffect(() => { if (appDataLoaded) saveKey('shipping_next_col_id', shippingNextColId); }, [shippingNextColId, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) saveKey('gtm_widecolor_data', gtmWideColorData); }, [gtmWideColorData, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) saveKey('gtm_hanging_data', gtmHangingData); }, [gtmHangingData, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) saveKey('gtm_submissions', gtmSubmissions); }, [gtmSubmissions, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) saveKey('gtm_new_store_list', gtmNewStoreList); }, [gtmNewStoreList, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) saveKey('gtm_largegfx_rounds', gtmLargeGfxRounds); }, [gtmLargeGfxRounds, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) saveKey('gtm_largegfx_draft', gtmLargeGfxDraft); }, [gtmLargeGfxDraft, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) saveKey('gtm_largegfx_photos', gtmLargeGfxPhotos); }, [gtmLargeGfxPhotos, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) saveKey('gtm_largegfx_compare', gtmLargeGfxCompareOverrides); }, [gtmLargeGfxCompareOverrides, appDataLoaded]);
 
   if (authLoading) return (
     <div style={{ display:"flex", alignItems:"center", justifyContent:"center", height:"100vh", background:"#f4f6fb" }}>
@@ -358,6 +405,20 @@ export default function App() {
         setHqItems={setHqItems}
         gtmWideColorData={gtmWideColorData}
         setGtmWideColorData={setGtmWideColorData}
+        gtmHangingData={gtmHangingData}
+        setGtmHangingData={setGtmHangingData}
+        gtmSubmissions={gtmSubmissions}
+        setGtmSubmissions={setGtmSubmissions}
+        gtmNewStoreList={gtmNewStoreList}
+        setGtmNewStoreList={setGtmNewStoreList}
+        gtmLargeGfxRounds={gtmLargeGfxRounds}
+        setGtmLargeGfxRounds={setGtmLargeGfxRounds}
+        gtmLargeGfxDraft={gtmLargeGfxDraft}
+        setGtmLargeGfxDraft={setGtmLargeGfxDraft}
+        gtmLargeGfxPhotos={gtmLargeGfxPhotos}
+        setGtmLargeGfxPhotos={setGtmLargeGfxPhotos}
+        gtmLargeGfxCompareOverrides={gtmLargeGfxCompareOverrides}
+        setGtmLargeGfxCompareOverrides={setGtmLargeGfxCompareOverrides}
         storeList={storeList}
         setStoreList={setStoreList}
         shippingTable1={shippingTable1}
@@ -634,7 +695,7 @@ const authStyles = {
 };
 
 // ─── 대쉬보드 ───────────────────────────────────────────────────────────
-function Dashboard({ user, onLogout, theme, onToggleTheme, confirmed, setConfirmed, tempSelected, setTempSelected, onSKConfirm, sknConfirmedSnap, mailRecipients, setMailRecipients, sknRecipients, setSknRecipients, showMailPopup, setShowMailPopup, shippingGroups, setShippingGroups, hqItems, setHqItems, gtmWideColorData, setGtmWideColorData, storeList, setStoreList, updatedDates, setUpdatedDates, preEditSnap, setPreEditSnap, lastSKNConfirmed, lastRevisionData, setLastRevisionData, shippingTable1, setShippingTable1, shippingStep, setShippingStep, shippingCustomCols, setShippingCustomCols, shippingNextColId, setShippingNextColId }) {
+function Dashboard({ user, onLogout, theme, onToggleTheme, confirmed, setConfirmed, tempSelected, setTempSelected, onSKConfirm, sknConfirmedSnap, mailRecipients, setMailRecipients, sknRecipients, setSknRecipients, showMailPopup, setShowMailPopup, shippingGroups, setShippingGroups, hqItems, setHqItems, gtmWideColorData, setGtmWideColorData, gtmHangingData, setGtmHangingData, gtmSubmissions, setGtmSubmissions, gtmNewStoreList, setGtmNewStoreList, gtmLargeGfxRounds, setGtmLargeGfxRounds, gtmLargeGfxDraft, setGtmLargeGfxDraft, gtmLargeGfxPhotos, setGtmLargeGfxPhotos, gtmLargeGfxCompareOverrides, setGtmLargeGfxCompareOverrides, storeList, setStoreList, updatedDates, setUpdatedDates, preEditSnap, setPreEditSnap, lastSKNConfirmed, lastRevisionData, setLastRevisionData, shippingTable1, setShippingTable1, shippingStep, setShippingStep, shippingCustomCols, setShippingCustomCols, shippingNextColId, setShippingNextColId }) {
   const [menu, setMenu] = useState("schedule");
   const role = user.role;
   const cfg  = ROLE_CONFIG[role];
@@ -738,7 +799,7 @@ function Dashboard({ user, onLogout, theme, onToggleTheme, confirmed, setConfirm
     { id:"schedule",  label:"배송 일정",    icon:"📅", roles: ["admin","skn","regional"] },
     { id:"hq",        label:"본사 배송 물품", icon:"🏢", roles: ["admin","skn","regional"] },
     { id:"regional",  label:"지역 배송 물품", icon:"📍", roles: ["admin","skn","regional"] },
-    { id:"gtm",       label:"GTM 취합",    icon:"📊", roles: ["admin","skn","regional"] },
+    { id:"gtm",       label:"GTM 취합",    icon:"📊", roles: ["admin","regional"] },
     { id:"incoming",  label:"입고처",       icon:"📦", roles: ["admin","skn","regional"] },
     { id:"settings",  label:"설정",         icon:"⚙️", roles: ["admin"] },
   ].filter(m => m.roles.includes(role));
@@ -926,7 +987,20 @@ function Dashboard({ user, onLogout, theme, onToggleTheme, confirmed, setConfirm
           ? <GTMPage
               gtmWideColorData={gtmWideColorData}
               setGtmWideColorData={setGtmWideColorData}
-              storeList={storeList}
+              gtmHangingData={gtmHangingData}
+              setGtmHangingData={setGtmHangingData}
+              gtmSubmissions={gtmSubmissions}
+              setGtmSubmissions={setGtmSubmissions}
+              gtmNewStoreList={gtmNewStoreList}
+              setGtmNewStoreList={setGtmNewStoreList}
+              gtmLargeGfxRounds={gtmLargeGfxRounds}
+              setGtmLargeGfxRounds={setGtmLargeGfxRounds}
+              gtmLargeGfxDraft={gtmLargeGfxDraft}
+              setGtmLargeGfxDraft={setGtmLargeGfxDraft}
+              gtmLargeGfxPhotos={gtmLargeGfxPhotos}
+              setGtmLargeGfxPhotos={setGtmLargeGfxPhotos}
+              gtmLargeGfxCompareOverrides={gtmLargeGfxCompareOverrides}
+              setGtmLargeGfxCompareOverrides={setGtmLargeGfxCompareOverrides}
               role={role}
             />
           : <Placeholder label={menus.find(m=>m.id===menu)?.label} />}
@@ -3996,9 +4070,52 @@ const GTM_TABS = [
   { id:"largegfx",   label:"라지그래픽" },
 ];
 
-function GTMPage({ gtmWideColorData, setGtmWideColorData, storeList, role }) {
+// 신설 매장 리스트의 "마케팅본부/마케팅팀" 값을 본부(수도권/부산/대구/서부/제주/중부)로 매핑
+const GTM_REGIONS = ["수도권","부산","대구","서부","제주","중부"];
+// 와이드컬러 업로드 시 "어느 소속인가요?" 선택지 (제주 제외, 유통사업부 포함)
+const WIDECOLOR_UPLOAD_SCOPES = ["수도권","부산","대구","서부","중부","유통사업부"];
+const GTM_TEAM_TO_REGION = {
+  "대전마케팅팀":"중부", "서대구마케팅팀":"대구", "서부소매사업팀":"서부",
+  "서광주마케팅팀":"서부", "동대구마케팅팀":"대구", "남부마케팅팀":"수도권",
+  "중앙마케팅팀":"수도권", "충북마케팅팀":"중부", "북부마케팅팀":"수도권",
+  "동광주마케팅팀":"서부", "인천마케팅팀":"수도권", "경남마케팅팀":"부산",
+  "서부마케팅팀":"서부", "중부산마케팅팀":"부산", "동부산마케팅팀":"부산",
+  "충남마케팅팀":"중부", "강원마케팅팀":"수도권", "수도권2소매사업팀":"수도권",
+  "경북마케팅팀":"대구",
+};
+function guessGtmRegion(mktgHQ, mktgTeam) {
+  const hq = String(mktgHQ||"").trim();
+  const direct = GTM_REGIONS.find(r => hq.startsWith(r));
+  if (direct) return direct;
+  const team = String(mktgTeam||"").trim();
+  if (GTM_TEAM_TO_REGION[team]) return GTM_TEAM_TO_REGION[team];
+  // 부산/대구 계열을 먼저 체크 (중부산·경북 등이 다른 지역명을 부분 포함하는 것 방지)
+  if (team.includes("부산") || team.includes("경남") || team.includes("울산")) return "부산";
+  if (team.includes("대구") || team.includes("경북")) return "대구";
+  if (team.includes("광주") || team.includes("전남") || team.includes("전북") || team.includes("서부")) return "서부";
+  if (team.includes("제주")) return "제주";
+  if (team.includes("충남") || team.includes("충북") || team.includes("대전") || team.includes("세종")) return "중부";
+  if (team.includes("인천") || team.includes("강원") || team.includes("수도권")) return "수도권";
+  return "";
+}
+// 이미 정규화된 본부명이면 그대로, 아니면(예: "중부마케팅담당") 다시 정규화 시도
+function normalizeGtmRegion(raw) {
+  const s = String(raw||"").trim();
+  if (GTM_REGIONS.includes(s)) return s;
+  return guessGtmRegion(s, "") || s || "-";
+}
+
+function GTMPage({ gtmWideColorData, setGtmWideColorData, gtmHangingData, setGtmHangingData, gtmSubmissions, setGtmSubmissions, gtmNewStoreList, setGtmNewStoreList, gtmLargeGfxRounds, setGtmLargeGfxRounds, gtmLargeGfxDraft, setGtmLargeGfxDraft, gtmLargeGfxPhotos, setGtmLargeGfxPhotos, gtmLargeGfxCompareOverrides, setGtmLargeGfxCompareOverrides, role }) {
   const [activeTab, setActiveTab] = useState("widecolor");
   const isAdmin = role === "admin";
+
+  const setSectionSubmissions = (sectionKey) => (updater) => {
+    setGtmSubmissions(prev => {
+      const cur = prev[sectionKey] || {};
+      const next = typeof updater === "function" ? updater(cur) : updater;
+      return { ...prev, [sectionKey]: next };
+    });
+  };
 
   return (
     <div style={styles.page}>
@@ -4019,11 +4136,43 @@ function GTMPage({ gtmWideColorData, setGtmWideColorData, storeList, role }) {
       </div>
 
       {activeTab === "widecolor"
-        ? <GTMWideColor
+        ? <GTMCollectSection
+            key="widecolor"
+            variant="store"
             data={gtmWideColorData}
             setData={setGtmWideColorData}
-            storeList={storeList}
+            newStoreList={gtmNewStoreList}
+            setNewStoreList={setGtmNewStoreList}
             isAdmin={isAdmin}
+            submissions={gtmSubmissions.widecolor || {}}
+            setSubmissions={setSectionSubmissions("widecolor")}
+            sectionLabel="와이드컬러"
+          />
+        : activeTab === "hanging"
+        ? <GTMCollectSection
+            key="hanging"
+            variant="hq"
+            data={gtmHangingData}
+            setData={setGtmHangingData}
+            isAdmin={isAdmin}
+            submissions={gtmSubmissions.hanging || {}}
+            setSubmissions={setSectionSubmissions("hanging")}
+            sectionLabel="행잉배너"
+          />
+        : activeTab === "largegfx"
+        ? <GTMLargeGfx
+            key="largegfx"
+            rounds={gtmLargeGfxRounds}
+            setRounds={setGtmLargeGfxRounds}
+            draft={gtmLargeGfxDraft}
+            setDraft={setGtmLargeGfxDraft}
+            photos={gtmLargeGfxPhotos}
+            setPhotos={setGtmLargeGfxPhotos}
+            compareOverrides={gtmLargeGfxCompareOverrides}
+            setCompareOverrides={setGtmLargeGfxCompareOverrides}
+            isAdmin={isAdmin}
+            submissions={gtmSubmissions.largegfx || {}}
+            setSubmissions={setSectionSubmissions("largegfx")}
           />
         : <div style={{background:"#fff", borderRadius:14, padding:48,
             boxShadow:"0 2px 16px rgba(0,0,0,0.07)", textAlign:"center", color:"#aaa", fontSize:15}}>
@@ -4034,19 +4183,157 @@ function GTMPage({ gtmWideColorData, setGtmWideColorData, storeList, role }) {
   );
 }
 
-function GTMWideColor({ data, setData, storeList, isAdmin }) {
+function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions, sectionLabel, variant="store", newStoreList, setNewStoreList }) {
   const fileRef = useRef(null);
+  const reuploadFileRef = useRef(null);
+  const newStoreFileRef = useRef(null);
   const [uploadStatus, setUploadStatus] = useState(null);
+  const [uploadRegion, setUploadRegion] = useState("");
+  const [reuploadStatus, setReuploadStatus] = useState(null);
+  const [newStoreUploadStatus, setNewStoreUploadStatus] = useState(null);
   const [activeSection, setActiveSection] = useState("list"); // "list" | "missing"
+  const [hqFilter, setHqFilter] = useState("전체");
+  const [showAddStore, setShowAddStore] = useState(false);
+  const [addStoreForm, setAddStoreForm] = useState({ 구분:"", 본부:"", 대리점코드:"", 대리점명:"", 매장코드:"", 매장명:"", 단면양면:"", 슬롯:"", 이전수량:"" });
+  const isStore = variant === "store";
 
-  // 와이드컬러에 있는 매장코드 목록
+  // 데이터에 있는 매장코드 목록
   const wcCodeSet = new Set(data.map(r => String(r.매장코드||"").trim()));
-  // 설정에서 업로드한 매장 목록에서 와이드컬러에 없는 매장 찾기
-  const missingStores = (storeList || []).filter(r =>
-    r.매장코드 && !wcCodeSet.has(String(r.매장코드).trim())
-  );
+  // 신설 매장 리스트 중 아직 이 데이터에 반영되지 않은 매장
+  const missingStores = isStore
+    ? (newStoreList || [])
+        .filter(r => r.매장코드 && !wcCodeSet.has(String(r.매장코드).trim()))
+        .map(r => ({ ...r, 본부: normalizeGtmRegion(r.본부) }))
+    : [];
+
+  // 필터 옵션: store 변형은 본부 단위, hq 변형은 "구분 - 본부" 단위(단, 유통사업부/PS&M류는 전체 하나로 묶음)
+  const filterOptions = isStore
+    ? Array.from(new Set(data.map(r=>r.본부).filter(Boolean))).map(hq => ({
+        key: hq, label: hq, predicate: row => row.본부 === hq,
+      }))
+    : (() => {
+        const opts = [];
+        const seen = new Set();
+        data.forEach(r => {
+          const gu = String(r.구분||"").trim();
+          if (!gu) return;
+          const isDistrib = gu.includes("유통") || gu.toUpperCase().includes("PS&M");
+          if (isDistrib) {
+            if (!seen.has(gu)) {
+              seen.add(gu);
+              opts.push({ key: gu, label: `${gu} 전체`, predicate: row => String(row.구분||"").trim()===gu });
+            }
+          } else {
+            const key = `${gu}|${r.본부}`;
+            if (!seen.has(key)) {
+              seen.add(key);
+              opts.push({ key, label: `${gu} - ${r.본부}`, predicate: row => String(row.구분||"").trim()===gu && row.본부===r.본부 });
+            }
+          }
+        });
+        return opts;
+      })();
+  const selectedOption = filterOptions.find(o => o.key === hqFilter);
+  const filteredData = hqFilter==="전체" ? data : data.filter(selectedOption ? selectedOption.predicate : ()=>true);
+  const filteredMissingStores = hqFilter==="전체" ? missingStores : missingStores.filter(selectedOption ? selectedOption.predicate : ()=>true);
 
   const handleUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (isStore && !isAdmin && !uploadRegion) {
+      setUploadStatus({type:"error", msg:"먼저 어느 본부 소속 데이터인지 선택해주세요."});
+      e.target.value="";
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = ev => {
+      try {
+        const wb = XLSX.read(ev.target.result, {type:"array"});
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(ws, {header:1});
+        let parsed;
+        if (isStore) {
+          // 헤더 행을 텍스트로 찾아서 열 위치를 인식 (공백 유무 등 표기가 조금씩 달라도 안전하게 대응)
+          const norm = (s) => String(s||"").replace(/\s+/g,"");
+          const headerRowIdx = rows.findIndex(r => Array.isArray(r) && r.some(c => norm(c)==="매장코드"));
+          const headerRow = headerRowIdx >= 0 ? rows[headerRowIdx] : [];
+          const colIdx = (name) => headerRow.findIndex(c => norm(c)===norm(name));
+          const guCol        = colIdx("구분");
+          const hqCol        = colIdx("본부");
+          const teamCol      = colIdx("마케팅팀");
+          const agentCodeCol = colIdx("대리점코드");
+          const agentNameCol = colIdx("대리점명");
+          const storeCodeCol = colIdx("매장코드");
+          const storeNameCol = colIdx("매장명");
+          const addressCol   = colIdx("주소");
+          const sideCol      = colIdx("단면형/양면형") >= 0 ? colIdx("단면형/양면형") : colIdx("단면/양면");
+          const slotCol      = colIdx("도광판슬롯");
+          // 수량 열: 몇 가지 흔한 이름으로 먼저 찾고, 못 찾으면 헤더의 마지막 열을 수량으로 간주(파일마다 열 개수가 달라도 대응)
+          let qtyCol = ["수량","기존수량","이전수량","배송수량","신청수량","물량"].map(colIdx).find(i=>i>=0);
+          if (qtyCol === undefined) qtyCol = -1;
+          if (qtyCol < 0 && headerRowIdx >= 0) qtyCol = headerRow.length - 1;
+          // 헤더를 못 찾으면 기존 고정 위치(2행 헤더, 11열)로 대체
+          const startRow = headerRowIdx >= 0 ? headerRowIdx+1 : 2;
+          const get = (r, idx, fallbackIdx) => (idx>=0 ? r[idx] : r[fallbackIdx]);
+          const dataRows = rows.slice(startRow).filter(r => (storeCodeCol>=0 ? r[storeCodeCol] : r[5]) != null);
+          parsed = dataRows.map((r,i) => {
+            const qty = get(r, qtyCol, 10);
+            return {
+              id: Date.now()+i,
+              구분: get(r, guCol, 0),
+              // 관리자는 파일 자체의 본부 값을 그대로 사용(여러 본부 한번에 업로드), 일반 계정은 선택한 본부로 강제 지정
+              본부: isAdmin ? get(r, hqCol, 1) : uploadRegion,
+              마케팅팀: get(r, teamCol, 2),
+              대리점코드: String(get(r, agentCodeCol, 3)||"").trim(),
+              대리점명: get(r, agentNameCol, 4),
+              매장코드: String(get(r, storeCodeCol, 5)||"").trim(),
+              매장명: get(r, storeNameCol, 6),
+              주소: get(r, addressCol, 7),
+              단면양면: get(r, sideCol, 8),
+              슬롯: get(r, slotCol, 9),
+              이전수량: qty,
+              신규수량: (qty!==undefined && qty!==null && qty!=="") ? qty : "", // 이전 수량을 기본값으로 채움 (수정 가능)
+            };
+          });
+        } else {
+          // 헤더: Row1 = [구분,본부,이전 취합 수량,희망 수량] — 구분은 그룹 첫 행에만 존재(병합 셀), 총계 행은 본부가 비어있어 제외
+          const dataRows = rows.slice(1).filter(r=>r[1]!=null);
+          let lastGroup = "";
+          parsed = dataRows.map((r,i) => {
+            if (r[0]!=null && String(r[0]).trim()!=="") lastGroup = String(r[0]).trim();
+            const 이전수량 = r[2];
+            return {
+              id: i+1,
+              구분: lastGroup,
+              본부: r[1],
+              이전수량,
+              신규수량: (이전수량!==undefined && 이전수량!==null && 이전수량!=="") ? 이전수량 : "",
+            };
+          });
+        }
+        if (isStore) {
+          if (isAdmin) {
+            // 관리자는 여러 본부가 섞인 전체 파일을 한 번에 올릴 수 있으므로 전체 교체
+            setData(parsed);
+          } else {
+            // 일반 계정은 선택한 본부 소속 데이터만 교체하고 다른 본부 데이터는 그대로 유지
+            setData(prev => [...prev.filter(r=>r.본부 !== uploadRegion), ...parsed]);
+          }
+          setUploadStatus({type:"success", msg:`${isAdmin ? "전체" : uploadRegion} ${parsed.length}개 항목 로드 완료`});
+          setUploadRegion(""); // 다음 업로드 때 다시 본부를 선택하도록 초기화
+        } else {
+          setData(parsed);
+          setUploadStatus({type:"success", msg:`${parsed.length}개 항목 로드 완료`});
+        }
+      } catch(err) {
+        setUploadStatus({type:"error", msg:"오류: "+err.message});
+      }
+    };
+    reader.readAsArrayBuffer(file);
+    e.target.value="";
+  };
+
+  const handleNewStoreUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
     const reader = new FileReader();
@@ -4055,28 +4342,38 @@ function GTMWideColor({ data, setData, storeList, isAdmin }) {
         const wb = XLSX.read(ev.target.result, {type:"array"});
         const ws = wb.Sheets[wb.SheetNames[0]];
         const rows = XLSX.utils.sheet_to_json(ws, {header:1});
-        // 헤더: Row2 = [구분,본부,마케팅팀,대리점코드,대리점명,매장코드,매장명,주소,단면형/양면형,도광판슬롯,수량]
-        const dataRows = rows.slice(2).filter(r=>r[0]!=null);
-        const parsed = dataRows.map((r,i) => ({
-          id: i+1,
-          구분: r[0],
-          본부: r[1],
-          마케팅팀: r[2],
-          대리점코드: String(r[3]||"").trim(),
-          대리점명: r[4],
-          매장코드: String(r[5]||"").trim(),
-          매장명: r[6],
-          주소: r[7],
-          단면양면: r[8],
-          슬롯: r[9],
-          이전수량: r[10],
-          신규수량: "", // 신규 입력
-          신설여부: false,
-        }));
-        setData(parsed);
-        setUploadStatus({type:"success", msg:`${parsed.length}개 매장 데이터 로드 완료`});
+        // 헤더: [매장코드,마케팅본부,마케팅팀,대리점코드,대리점명,매장명] — 열 이름으로 자동 인식
+        const header = (rows[0]||[]).map(h=>String(h||"").trim());
+        const colIdx = (name) => { const i = header.indexOf(name); return i>=0 ? i : -1; };
+        const storeCodeCol = colIdx("매장코드");
+        const mktgCol      = colIdx("마케팅본부");
+        const teamCol      = colIdx("마케팅팀");
+        const agentCodeCol = colIdx("대리점코드");
+        const agentNameCol = colIdx("대리점명");
+        const storeNameCol = colIdx("매장명");
+        if (storeCodeCol < 0) {
+          setNewStoreUploadStatus({type:"error", msg:"열 이름을 찾을 수 없습니다. '매장코드' 열이 있는지 확인해주세요."});
+          return;
+        }
+        const dataRows = rows.slice(1).filter(r=>r[storeCodeCol]);
+        const parsed = dataRows.map(r => {
+          const mktgHQ = String(mktgCol>=0 ? (r[mktgCol]||"") : "");
+          const team   = String(teamCol>=0 ? (r[teamCol]||"") : "");
+          return {
+            매장코드: String(r[storeCodeCol]||"").trim(),
+            매장명: String(storeNameCol>=0 ? (r[storeNameCol]||"") : ""),
+            대리점코드: String(agentCodeCol>=0 ? (r[agentCodeCol]||"") : "").trim(),
+            대리점명: String(agentNameCol>=0 ? (r[agentNameCol]||"") : ""),
+            구분: mktgHQ.includes('유통사업부') ? 'PS&M' : '지역본부',
+            본부: guessGtmRegion(mktgHQ, team) || "-",
+            확인여부: false,
+            비고: "",
+          };
+        });
+        setNewStoreList(parsed);
+        setNewStoreUploadStatus({type:"success", msg:`${parsed.length}개 신설 매장 로드 완료`});
       } catch(err) {
-        setUploadStatus({type:"error", msg:"오류: "+err.message});
+        setNewStoreUploadStatus({type:"error", msg:"오류: "+err.message});
       }
     };
     reader.readAsArrayBuffer(file);
@@ -4086,34 +4383,179 @@ function GTMWideColor({ data, setData, storeList, isAdmin }) {
   const updateRow = (id, field, val) => {
     setData(prev => prev.map(r => r.id===id ? {...r, [field]:val} : r));
   };
+  const deleteRow = (id) => {
+    setData(prev => prev.filter(r => r.id!==id));
+  };
+
+  const updateNewStore = (매장코드, field, val) => {
+    setNewStoreList(prev => prev.map(r => r.매장코드===매장코드 ? {...r, [field]:val} : r));
+  };
+
+  // 전체 목록에 매장 한 건 추가 (누락 매장에서 "추가" 또는 "매장 추가" 버튼으로 진입)
+  const addStoreRow = (fields) => {
+    setData(prev => {
+      const nextId = prev.reduce((m,r)=>Math.max(m, r.id||0), 0) + 1;
+      return [...prev, {
+        id: nextId,
+        구분: fields.구분||"", 본부: fields.본부||"", 마케팅팀: "",
+        대리점코드: fields.대리점코드||"", 대리점명: fields.대리점명||"",
+        매장코드: fields.매장코드||"", 매장명: fields.매장명||"", 주소: "",
+        단면양면: fields.단면양면||"", 슬롯: fields.슬롯||"",
+        이전수량: fields.이전수량 ?? 0, 신규수량: "",
+      }];
+    });
+  };
 
   const downloadResult = () => {
-    const wsData = [
-      ["구분","본부","마케팅팀","대리점코드","대리점명","매장코드","매장명","주소","단면형/양면형","도광판슬롯","이전수량","신규수량"],
-      ...data.map(r=>[r.구분,r.본부,r.마케팅팀,r.대리점코드,r.대리점명,r.매장코드,r.매장명,r.주소,r.단면양면,r.슬롯,r.이전수량,r.신규수량||0])
-    ];
-    const ws = XLSX.utils.aoa_to_sheet(wsData);
-    ws["!cols"] = [8,8,12,10,10,12,14,24,10,8,8,8].map(w=>({wch:w}));
+    const header = isStore
+      ? ["구분","본부","마케팅팀","대리점코드","대리점명","매장코드","매장명","주소","단면형/양면형","도광판슬롯","이전수량","신규수량"]
+      : ["구분","본부","이전수량","신규수량"];
+    const body = isStore
+      ? data.map(r=>[r.구분,r.본부,r.마케팅팀,r.대리점코드,r.대리점명,r.매장코드,r.매장명,r.주소,r.단면양면,r.슬롯,r.이전수량,r.신규수량||0])
+      : data.map(r=>[r.구분,r.본부,r.이전수량,r.신규수량||0]);
+    const ws = XLSX.utils.aoa_to_sheet([header, ...body]);
+    ws["!cols"] = (isStore ? [8,8,12,10,10,12,14,24,10,8,8,8] : [10,8,10,10]).map(w=>({wch:w}));
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "와이드컬러");
-    XLSX.writeFile(wb, "와이드컬러_수량취합.xlsx");
+    XLSX.utils.book_append_sheet(wb, ws, sectionLabel);
+    XLSX.writeFile(wb, `${sectionLabel}_수량취합.xlsx`);
+  };
+
+  // 다운로드한 수량취합 엑셀을 지역본부에서 작업 후 재업로드 → 매장코드 기준으로 덮어쓰기(신규 매장코드는 추가)
+  const handleReuploadResult = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      try {
+        const wb = XLSX.read(ev.target.result, {type:"array"});
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(ws, {header:1});
+        const dataRows = rows.slice(1).filter(r=>r[5]);
+        const updatesByCode = new Map();
+        dataRows.forEach(r => {
+          const code = String(r[5]||"").trim();
+          if (!code) return;
+          updatesByCode.set(code, {
+            구분:r[0], 본부:r[1], 마케팅팀:r[2],
+            대리점코드:String(r[3]||"").trim(), 대리점명:r[4],
+            매장코드:code, 매장명:r[6], 주소:r[7],
+            단면양면:r[8], 슬롯:r[9], 이전수량:r[10],
+            신규수량: (r[11]!==undefined && r[11]!==null && r[11]!=="") ? r[11] : r[10], // 수량 열이 비어있으면 이전수량을 그대로 사용
+          });
+        });
+        setData(prev => {
+          const next = prev.map(row => updatesByCode.has(row.매장코드) ? { ...row, ...updatesByCode.get(row.매장코드) } : row);
+          let nextId = next.reduce((m,r)=>Math.max(m, r.id||0), 0);
+          updatesByCode.forEach((fields, code) => {
+            if (!next.some(r=>r.매장코드===code)) {
+              nextId += 1;
+              next.push({ id: nextId, ...fields });
+            }
+          });
+          return next;
+        });
+        setReuploadStatus({type:"success", msg:`${updatesByCode.size}개 매장 반영 완료`});
+      } catch(err) {
+        setReuploadStatus({type:"error", msg:"오류: "+err.message});
+      }
+    };
+    reader.readAsArrayBuffer(file);
+    e.target.value="";
+  };
+
+  // 전체 목록 제출과 누락 매장 제출을 별개로 추적: submissions = { list: {...}, missing: {...} }
+  const submissionScope = (isStore && activeSection === "missing") ? "missing" : "list";
+  const scopeLabel = submissionScope === "missing" ? "누락 매장" : "전체 목록";
+  const submission = hqFilter!=="전체" ? (submissions[submissionScope]||{})[hqFilter] : null;
+  const isSubmitted = !!submission?.submitted;
+  const inputsLocked = isSubmitted && !isAdmin;
+
+  const handleSubmit = () => {
+    if (hqFilter === "전체") return;
+    setSubmissions(prev => ({ ...prev, [submissionScope]: { ...(prev[submissionScope]||{}), [hqFilter]: { submitted:true, submittedAt:new Date().toISOString() } } }));
+  };
+  const handleCancelSubmit = () => {
+    if (hqFilter === "전체") return;
+    setSubmissions(prev => ({ ...prev, [submissionScope]: { ...(prev[submissionScope]||{}), [hqFilter]: { submitted:false, submittedAt:null } } }));
   };
 
   return (
     <div style={{display:"flex", flexDirection:"column", gap:16}}>
+      {/* 관리자 전용: 사업부별 제출 현황 (맨 위) */}
+      {isAdmin && filterOptions.length > 0 && (
+        <div style={{background:"#fff", borderRadius:14, boxShadow:"0 2px 16px rgba(0,0,0,0.07)", padding:20}}>
+          <div style={{fontSize:14, fontWeight:800, marginBottom:12, color:"#333"}}>✅ 사업부별 제출 현황(관리자 전용)</div>
+          <div style={{overflowX:"auto"}}>
+            <table style={{borderCollapse:"collapse", width:"100%", minWidth: isStore?680:480, fontSize:12.5}}>
+              <thead>
+                <tr style={{background:"#f0f4f8"}}>
+                  <th style={tH}>유통사업부</th>
+                  <th style={tH}>{isStore ? "전체 목록 제출" : "제출여부"}</th>
+                  <th style={tH}>{isStore ? "전체 목록 제출 일시" : "제출 일시"}</th>
+                  {isStore && <th style={tH}>누락 매장 제출</th>}
+                  {isStore && <th style={tH}>누락 매장 제출 일시</th>}
+                </tr>
+              </thead>
+              <tbody>
+                {filterOptions.map((opt,i)=>{
+                  const listSub = (submissions.list||{})[opt.key];
+                  const missingSub = (submissions.missing||{})[opt.key];
+                  const statusCell = (sub) => sub?.submitted
+                    ? <span style={{color:"#2e8b57", fontWeight:700}}>✅ 제출완료</span>
+                    : <span style={{color:"#aaa"}}>⏳ 미제출</span>;
+                  return (
+                    <tr key={opt.key} style={{background:i%2===0?"#fafafa":"#fff"}}>
+                      <td style={{...tD, textAlign:"center", fontWeight:700}}>{opt.label}</td>
+                      <td style={{...tD, textAlign:"center"}}>{statusCell(listSub)}</td>
+                      <td style={{...tD, textAlign:"center", color:"#666"}}>
+                        {listSub?.submittedAt ? new Date(listSub.submittedAt).toLocaleString('ko-KR') : "-"}
+                      </td>
+                      {isStore && <td style={{...tD, textAlign:"center"}}>{statusCell(missingSub)}</td>}
+                      {isStore && (
+                        <td style={{...tD, textAlign:"center", color:"#666"}}>
+                          {missingSub?.submittedAt ? new Date(missingSub.submittedAt).toLocaleString('ko-KR') : "-"}
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {/* 업로드 영역 */}
       <div style={{background:"#fff", borderRadius:14, boxShadow:"0 2px 16px rgba(0,0,0,0.07)", padding:24}}>
-        <div style={{fontSize:15, fontWeight:800, marginBottom:10}}>📂 와이드컬러 데이터 업로드</div>
+        <div style={{fontSize:15, fontWeight:800, marginBottom:10}}>📂 {sectionLabel} 데이터 업로드</div>
         <div style={{fontSize:12, color:"#888", marginBottom:12}}>
-          기존 와이드컬러 배송 리스트 엑셀 파일을 업로드하면 이전 수량이 자동으로 로드됩니다.
+          기존 {sectionLabel} 배송 리스트 엑셀 파일을 업로드하면 이전 수량이 자동으로 로드됩니다.
+          {isStore && (isAdmin
+            ? " 관리자는 본부 선택 없이 전체 데이터를 한 번에 업로드합니다."
+            : " 업로드하면 선택한 본부 데이터만 교체되고 다른 본부 데이터는 그대로 유지됩니다.")}
         </div>
         <div style={{display:"flex", gap:8, alignItems:"center", flexWrap:"wrap"}}>
+          {isStore && !isAdmin && (
+            <select value={uploadRegion} onChange={e=>setUploadRegion(e.target.value)}
+              style={{padding:"7px 12px", borderRadius:8, border:"1px solid #ddd",
+                fontSize:12.5, fontWeight:600, color: uploadRegion?"#444":"#c00", background:"#fff", cursor:"pointer"}}>
+              <option value="">어느 본부 소속인가요?</option>
+              {WIDECOLOR_UPLOAD_SCOPES.map(r=>(<option key={r} value={r}>{r}</option>))}
+            </select>
+          )}
           <button style={{...settingsBtn("#1d6fa4"), padding:"7px 18px", fontSize:12}}
             onClick={()=>fileRef.current?.click()}>📂 파일 선택</button>
           <input ref={fileRef} type="file" accept=".xlsx,.xls" style={{display:"none"}} onChange={handleUpload}/>
           {data.length > 0 && (
             <button style={{...settingsBtn("#2e8b57"), padding:"7px 18px", fontSize:12}}
               onClick={downloadResult}>⬇ 수량취합 엑셀 다운로드</button>
+          )}
+          {isStore && data.length > 0 && (
+            <>
+              <button style={{...settingsBtn("#e8420a"), padding:"7px 18px", fontSize:12}}
+                onClick={()=>reuploadFileRef.current?.click()}>📤 취합 결과 업로드</button>
+              <input ref={reuploadFileRef} type="file" accept=".xlsx,.xls" style={{display:"none"}} onChange={handleReuploadResult}/>
+            </>
           )}
           {uploadStatus && (
             <span style={{fontSize:12, padding:"5px 12px", borderRadius:8,
@@ -4122,83 +4564,182 @@ function GTMWideColor({ data, setData, storeList, isAdmin }) {
               {uploadStatus.type==="success"?"✅ ":"❌ "}{uploadStatus.msg}
             </span>
           )}
+          {reuploadStatus && (
+            <span style={{fontSize:12, padding:"5px 12px", borderRadius:8,
+              background:reuploadStatus.type==="success"?"#e8f8ee":"#fff0f0",
+              color:reuploadStatus.type==="success"?"#2e8b57":"#c00"}}>
+              {reuploadStatus.type==="success"?"✅ ":"❌ "}{reuploadStatus.msg}
+            </span>
+          )}
         </div>
+        {isStore && data.length > 0 && (
+          <div style={{fontSize:11, color:"#aaa", marginTop:8}}>
+            "⬇ 수량취합 엑셀 다운로드"로 받은 파일을 그대로 수정해서 "📤 취합 결과 업로드"로 다시 올리면, 매장코드를 기준으로 전체 목록에 덮어써집니다 (없는 매장코드는 새로 추가됩니다).
+          </div>
+        )}
       </div>
 
       {data.length > 0 && (
         <>
           {/* 섹션 탭 */}
-          <div style={{display:"flex", gap:8}}>
+          <div style={{display:"flex", gap:8, alignItems:"center", flexWrap:"wrap"}}>
             <button onClick={()=>setActiveSection("list")} style={{
               padding:"8px 20px", borderRadius:50, border:"none", cursor:"pointer", fontSize:13, fontWeight:700,
               background:activeSection==="list"?"#1d6fa4":"#e0e6ed",
               color:activeSection==="list"?"#fff":"#444",
             }}>📋 전체 목록 ({data.length})</button>
-            <button onClick={()=>setActiveSection("missing")} style={{
-              padding:"8px 20px", borderRadius:50, border:"none", cursor:"pointer", fontSize:13, fontWeight:700,
-              background:activeSection==="missing"?"#e85d26":"#ffeee8",
-              color:activeSection==="missing"?"#fff":"#e85d26",
-            }}>
-              ⚠️ 누락 매장
-              {missingStores.length > 0 &&
-                <span style={{marginLeft:6, background:"#c00", color:"#fff", borderRadius:10,
-                  padding:"0 6px", fontSize:11}}>{missingStores.length}</span>}
-            </button>
+            {isStore && (
+              <button onClick={()=>setActiveSection("missing")} style={{
+                padding:"8px 20px", borderRadius:50, border:"none", cursor:"pointer", fontSize:13, fontWeight:700,
+                background:activeSection==="missing"?"#e85d26":"#ffeee8",
+                color:activeSection==="missing"?"#fff":"#e85d26",
+              }}>
+                ⚠️ 누락 매장
+                {missingStores.length > 0 &&
+                  <span style={{marginLeft:6, background:"#c00", color:"#fff", borderRadius:10,
+                    padding:"0 6px", fontSize:11}}>{missingStores.length}</span>}
+              </button>
+            )}
+            {filterOptions.length > 0 && (
+              <select value={hqFilter} onChange={e=>setHqFilter(e.target.value)}
+                style={{marginLeft:"auto", padding:"7px 14px", borderRadius:8, border:"1px solid #ddd",
+                  fontSize:12.5, fontWeight:600, color:"#444", background:"#fff", cursor:"pointer"}}>
+                <option value="전체">전체 ({data.length})</option>
+                {filterOptions.map(opt=>(
+                  <option key={opt.key} value={opt.key}>{opt.label} ({data.filter(opt.predicate).length})</option>
+                ))}
+              </select>
+            )}
+            {hqFilter !== "전체" && (
+              <>
+                {isSubmitted && (
+                  <span style={{fontSize:12, fontWeight:700, color:"#2e8b57", background:"#e8f8ee",
+                    padding:"6px 12px", borderRadius:8}}>
+                    ✅ {scopeLabel} 제출완료 ({new Date(submission.submittedAt).toLocaleString('ko-KR')})
+                  </span>
+                )}
+                <button
+                  onClick={handleSubmit}
+                  disabled={isSubmitted}
+                  style={{...settingsBtn(isSubmitted?"#bbb":"#e8420a"), padding:"7px 18px", fontSize:12.5,
+                    cursor:isSubmitted?"default":"pointer"}}>
+                  {isSubmitted ? `${scopeLabel} 제출완료` : `${scopeLabel} 제출하기`}
+                </button>
+                {isAdmin && isSubmitted && (
+                  <button onClick={handleCancelSubmit}
+                    style={{...settingsBtn("#aaa"), padding:"7px 14px", fontSize:12}}>제출 취소</button>
+                )}
+                {isStore && activeSection === "list" && (
+                  <button onClick={()=>{
+                    setAddStoreForm({ 구분:"", 본부: hqFilter!=="전체" ? hqFilter : "", 대리점코드:"", 대리점명:"", 매장코드:"", 매장명:"", 단면양면:"", 슬롯:"", 이전수량:"" });
+                    setShowAddStore(true);
+                  }}
+                    style={{...settingsBtn("#1d6fa4"), padding:"7px 14px", fontSize:12}}>+ 매장 추가</button>
+                )}
+              </>
+            )}
           </div>
 
           {activeSection === "list" && (
             <div style={{background:"#fff", borderRadius:14, boxShadow:"0 2px 16px rgba(0,0,0,0.07)", overflow:"hidden"}}>
               <div style={{overflowX:"auto"}}>
-                <table style={{borderCollapse:"collapse", width:"100%", minWidth:900, fontSize:12}}>
+                <table style={{borderCollapse:"collapse", width:"100%", minWidth: isStore?900:500, fontSize:12}}>
                   <thead>
                     <tr style={{background:"#f0f4f8"}}>
-                      <th style={tH}>#</th>
-                      <th style={tH}>본부</th>
-                      <th style={tH}>대리점코드</th>
-                      <th style={{...tH, minWidth:120}}>매장명</th>
-                      <th style={tH}>단면/양면</th>
-                      <th style={tH}>슬롯</th>
-                      <th style={{...tH, background:"#e8f0fb", color:"#1d6fa4"}}>이전 수량</th>
-                      <th style={{...tH, background:"#e8f8ee", color:"#2e8b57", minWidth:100}}>신규 수량 입력</th>
+                      {isStore ? (
+                        <>
+                          <th style={tH}>#</th>
+                          <th style={tH}>본부</th>
+                          <th style={tH}>매장코드</th>
+                          <th style={{...tH, minWidth:120}}>매장명</th>
+                          <th style={tH}>단면/양면</th>
+                          <th style={tH}>슬롯</th>
+                        </>
+                      ) : (
+                        <>
+                          <th style={tH}>구분</th>
+                          <th style={tH}>본부</th>
+                        </>
+                      )}
+                      <th style={{...tH, background:"#e8f0fb", color:"#1d6fa4"}}>이전수량</th>
+                      <th style={{...tH, background:"#e8f8ee", color:"#2e8b57", minWidth:100}}>수량</th>
+                      <th style={{...tH, width:50}}>삭제</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {data.map((row,i)=>(
+                    {filteredData.map((row,i)=>(
                       <tr key={row.id} style={{background:i%2===0?"#fafafa":"#fff"}}>
-                        <td style={{...tD, textAlign:"center", color:"#aaa"}}>{row.구분}</td>
-                        <td style={{...tD, textAlign:"center"}}>{row.본부}</td>
-                        <td style={{...tD, textAlign:"center", fontSize:11, color:"#666"}}>{row.대리점코드}</td>
-                        <td style={tD}>
-                          <div style={{fontWeight:600}}>{row.매장명}</div>
-                          <div style={{fontSize:10, color:"#aaa"}}>{row.매장코드}</div>
-                        </td>
-                        <td style={{...tD, textAlign:"center"}}>{row.단면양면}</td>
-                        <td style={{...tD, textAlign:"center"}}>{row.슬롯}</td>
-                        <td style={{...tD, textAlign:"center", background:"#f0f7ff", fontWeight:700, color:"#1d6fa4"}}>
-                          {row.이전수량}
+                        {isStore ? (
+                          <>
+                            <td style={{...tD, textAlign:"center", color:"#aaa"}}>{i+1}</td>
+                            <td style={{...tD, textAlign:"center"}}>{row.본부}</td>
+                            <td style={{...tD, textAlign:"center", fontSize:11, color:"#666"}}>{row.매장코드}</td>
+                            <td style={{...tD, fontWeight:600}}>{row.매장명}</td>
+                            <td style={{...tD, textAlign:"center"}}>
+                              <input
+                                type="text"
+                                disabled={inputsLocked}
+                                value={row.단면양면||""}
+                                onChange={e=>updateRow(row.id,"단면양면",e.target.value)}
+                                style={{...numInput, width:56, textAlign:"center", opacity: inputsLocked?0.6:1}}
+                              />
+                            </td>
+                            <td style={{...tD, textAlign:"center"}}>
+                              <input
+                                type="text"
+                                disabled={inputsLocked}
+                                value={row.슬롯||""}
+                                onChange={e=>updateRow(row.id,"슬롯",e.target.value)}
+                                style={{...numInput, width:56, textAlign:"center", opacity: inputsLocked?0.6:1}}
+                              />
+                            </td>
+                          </>
+                        ) : (
+                          <>
+                            <td style={{...tD, textAlign:"center", fontWeight:700, color:"#555"}}>{row.구분}</td>
+                            <td style={{...tD, textAlign:"center"}}>{row.본부}</td>
+                          </>
+                        )}
+                        <td style={{...tD, textAlign:"center", background:"#f0f7ff"}}>
+                          <input
+                            type="number" min="0"
+                            disabled={inputsLocked}
+                            value={row.이전수량 ?? ""}
+                            onChange={e=>updateRow(row.id,"이전수량",e.target.value)}
+                            style={{...numInput, width:60, textAlign:"center", fontWeight:700, color:"#1d6fa4", opacity: inputsLocked?0.6:1}}
+                          />
                         </td>
                         <td style={{...tD, textAlign:"center", background:"#f0fff4"}}>
                           <input
                             type="number" min="0"
+                            disabled={inputsLocked}
                             style={{...numInput, width:70, fontWeight:700,
                               color: row.신규수량!==""?"#2e8b57":"#aaa",
-                              borderColor: row.신규수량!==""?"#2e8b57":"#ddd"}}
+                              borderColor: row.신규수량!==""?"#2e8b57":"#ddd",
+                              opacity: inputsLocked?0.6:1, cursor: inputsLocked?"not-allowed":"text"}}
                             value={row.신규수량}
                             placeholder={String(row.이전수량||0)}
                             onChange={e=>updateRow(row.id,"신규수량",e.target.value)}
                           />
                         </td>
+                        <td style={{...tD, textAlign:"center"}}>
+                          <button onClick={()=>deleteRow(row.id)} disabled={inputsLocked}
+                            style={{width:24, height:24, borderRadius:"50%", border:"none",
+                              background: inputsLocked?"#ccc":"#c00",
+                              color:"#fff", fontSize:13, fontWeight:800, cursor: inputsLocked?"not-allowed":"pointer", lineHeight:1}}>×</button>
+                        </td>
                       </tr>
                     ))}
                     {/* 합계 행 */}
                     <tr style={{background:"#e8f0fb", fontWeight:700}}>
-                      <td colSpan={6} style={{...tD, textAlign:"right", color:"#555"}}>합 계</td>
+                      <td colSpan={isStore?6:2} style={{...tD, textAlign:"right", color:"#555"}}>합 계</td>
                       <td style={{...tD, textAlign:"center", color:"#1d6fa4"}}>
-                        {data.reduce((s,r)=>s+(Number(r.이전수량)||0),0)}
+                        {filteredData.reduce((s,r)=>s+(Number(r.이전수량)||0),0)}
                       </td>
                       <td style={{...tD, textAlign:"center", color:"#2e8b57"}}>
-                        {data.reduce((s,r)=>s+(Number(r.신규수량)||0),0)}
+                        {filteredData.reduce((s,r)=>s+(Number(r.신규수량)||0),0)}
                       </td>
+                      <td style={tD}></td>
                     </tr>
                   </tbody>
                 </table>
@@ -4206,62 +4747,673 @@ function GTMWideColor({ data, setData, storeList, isAdmin }) {
             </div>
           )}
 
-          {activeSection === "missing" && (
-            <div style={{background:"#fff", borderRadius:14, boxShadow:"0 2px 16px rgba(0,0,0,0.07)", overflow:"hidden"}}>
-              {missingStores.length === 0 ? (
-                <div style={{padding:40, textAlign:"center", color:"#aaa", fontSize:14}}>
-                  {(!storeList || storeList.length === 0)
-                    ? "설정 메뉴에서 매장 리스트를 먼저 업로드해주세요."
-                    : "누락된 매장이 없습니다. ✅"}
+          {isStore && activeSection === "missing" && (
+            <div style={{display:"flex", flexDirection:"column", gap:12}}>
+              {/* 신설 매장 리스트 업로드 */}
+              <div style={{background:"#fff", borderRadius:14, boxShadow:"0 2px 16px rgba(0,0,0,0.07)", padding:20}}>
+                <div style={{fontSize:13.5, fontWeight:800, marginBottom:8}}>🆕 신설 매장 리스트 업로드</div>
+                <div style={{fontSize:11.5, color:"#888", marginBottom:10}}>
+                  매장코드, 마케팅본부, 마케팅팀, 대리점코드, 대리점명, 매장명 열이 포함된 엑셀을 업로드하면, 이 리스트를 기준으로 {sectionLabel}에 누락된 매장을 확인합니다. (설정 메뉴의 전체 매장 리스트가 아닌, 별도의 신설 매장 리스트입니다.)
                 </div>
-              ) : (
-                <div style={{overflowX:"auto"}}>
-                  <div style={{padding:"12px 16px", background:"#fff8f0", fontSize:12, color:"#e85d26", borderBottom:"1px solid #ffd"}}>
-                    ⚠️ 매장 리스트에는 있지만 와이드컬러 데이터에 없는 매장입니다. 신설 매장이거나 신청하지 않은 매장일 수 있습니다.
+                <div style={{display:"flex", gap:8, alignItems:"center", flexWrap:"wrap"}}>
+                  <button style={{...settingsBtn("#e8420a"), padding:"7px 18px", fontSize:12}}
+                    onClick={()=>newStoreFileRef.current?.click()}>📂 신설 매장 리스트 업로드</button>
+                  <input ref={newStoreFileRef} type="file" accept=".xlsx,.xls" style={{display:"none"}} onChange={handleNewStoreUpload}/>
+                  <span style={{fontSize:12, color:"#666"}}>현재 {newStoreList?.length||0}개 등록됨</span>
+                  {newStoreUploadStatus && (
+                    <span style={{fontSize:12, padding:"5px 12px", borderRadius:8,
+                      background:newStoreUploadStatus.type==="success"?"#e8f8ee":"#fff0f0",
+                      color:newStoreUploadStatus.type==="success"?"#2e8b57":"#c00"}}>
+                      {newStoreUploadStatus.type==="success"?"✅ ":"❌ "}{newStoreUploadStatus.msg}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div style={{background:"#fff", borderRadius:14, boxShadow:"0 2px 16px rgba(0,0,0,0.07)", overflow:"hidden"}}>
+                {(!newStoreList || newStoreList.length === 0) ? (
+                  <div style={{padding:40, textAlign:"center", color:"#aaa", fontSize:14}}>
+                    신설 매장 리스트를 먼저 업로드해주세요.
                   </div>
-                  <table style={{borderCollapse:"collapse", width:"100%", minWidth:700, fontSize:12}}>
-                    <thead>
-                      <tr style={{background:"#fff8f0"}}>
-                        <th style={tH}>매장코드</th>
-                        <th style={{...tH, minWidth:120}}>매장명</th>
-                        <th style={tH}>구분</th>
-                        <th style={tH}>본부</th>
-                        <th style={{...tH, width:100}}>신설 매장</th>
-                        <th style={{...tH, minWidth:120}}>비고</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {missingStores.map((s,i)=>(
-                        <tr key={i} style={{background:i%2===0?"#fafafa":"#fff"}}>
-                          <td style={{...tD, fontSize:11, color:"#666"}}>{s.매장코드}</td>
-                          <td style={{...tD, fontWeight:600}}>{s.매장명||s.매장코드}</td>
-                          <td style={{...tD, textAlign:"center"}}>{s.구분||"-"}</td>
-                          <td style={{...tD, textAlign:"center"}}>{s.본부||"-"}</td>
-                          <td style={{...tD, textAlign:"center"}}>
-                            <label style={{display:"flex", alignItems:"center", justifyContent:"center", gap:6, cursor:"pointer"}}>
-                              <input type="checkbox"
-                                checked={!!s.신설여부}
-                                onChange={e=>setData(prev=>prev.map(r=>r.매장코드===s.매장코드?{...r,신설여부:e.target.checked}:r))}
-                                style={{width:16,height:16,accentColor:"#e85d26"}} />
-                              <span style={{fontSize:11,color:s.신설여부?"#e85d26":"#aaa"}}>
-                                {s.신설여부?"신설":"미확인"}
-                              </span>
-                            </label>
-                          </td>
-                          <td style={tD}>
-                            <input style={{...numInput, width:"100%", textAlign:"left"}}
-                              value={s.비고||""} placeholder="비고 입력"
-                              onChange={e=>setData(prev=>prev.map(r=>r.매장코드===s.매장코드?{...r,비고:e.target.value}:r))} />
-                          </td>
+                ) : filteredMissingStores.length === 0 ? (
+                  <div style={{padding:40, textAlign:"center", color:"#aaa", fontSize:14}}>
+                    누락된 매장이 없습니다. ✅
+                  </div>
+                ) : (
+                  <div style={{overflowX:"auto"}}>
+                    <div style={{padding:"12px 16px", background:"#fff8f0", fontSize:12, color:"#e85d26", borderBottom:"1px solid #ffd"}}>
+                      ⚠️ 신설 매장 리스트에는 있지만 {sectionLabel} 데이터에 아직 없는 매장입니다.
+                    </div>
+                    <table style={{borderCollapse:"collapse", width:"100%", minWidth:700, fontSize:12}}>
+                      <thead>
+                        <tr style={{background:"#fff8f0"}}>
+                          <th style={tH}>#</th>
+                          <th style={tH}>본부</th>
+                          <th style={tH}>매장코드</th>
+                          <th style={{...tH, minWidth:120}}>매장명</th>
+                          <th style={{...tH, width:100}}>확인</th>
+                          <th style={{...tH, minWidth:120}}>비고</th>
+                          <th style={{...tH, width:60}}>추가</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
+                      </thead>
+                      <tbody>
+                        {filteredMissingStores.map((s,i)=>(
+                          <tr key={s.매장코드+i} style={{background:i%2===0?"#fafafa":"#fff"}}>
+                            <td style={{...tD, textAlign:"center", color:"#aaa"}}>{i+1}</td>
+                            <td style={{...tD, textAlign:"center"}}>{s.본부||"-"}</td>
+                            <td style={{...tD, fontSize:11, color:"#666"}}>{s.매장코드}</td>
+                            <td style={{...tD, fontWeight:600}}>{s.매장명||s.매장코드}</td>
+                            <td style={{...tD, textAlign:"center"}}>
+                              <label style={{display:"flex", alignItems:"center", justifyContent:"center", gap:6, cursor: inputsLocked?"not-allowed":"pointer"}}>
+                                <input type="checkbox"
+                                  disabled={inputsLocked}
+                                  checked={!!s.확인여부}
+                                  onChange={e=>updateNewStore(s.매장코드,"확인여부",e.target.checked)}
+                                  style={{width:16,height:16,accentColor:"#e85d26"}} />
+                                <span style={{fontSize:11,color:s.확인여부?"#e85d26":"#aaa"}}>
+                                  {s.확인여부?"확인":"미확인"}
+                                </span>
+                              </label>
+                            </td>
+                            <td style={tD}>
+                              <input style={{...numInput, width:"100%", textAlign:"left", opacity: inputsLocked?0.6:1}}
+                                disabled={inputsLocked}
+                                value={s.비고||""} placeholder="비고 입력"
+                                onChange={e=>updateNewStore(s.매장코드,"비고",e.target.value)} />
+                            </td>
+                            <td style={{...tD, textAlign:"center"}}>
+                              <button
+                                title="매장리스트에 추가"
+                                disabled={inputsLocked}
+                                onClick={()=>addStoreRow({ 구분:s.구분, 본부:s.본부, 대리점코드:s.대리점코드, 대리점명:s.대리점명, 매장코드:s.매장코드, 매장명:s.매장명 })}
+                                style={{width:26, height:26, borderRadius:"50%", border:"none",
+                                  background: inputsLocked?"#bbb":"#2e8b57",
+                                  color:"#fff", fontSize:15, fontWeight:800, lineHeight:1, cursor: inputsLocked?"not-allowed":"pointer",
+                                  display:"inline-flex", alignItems:"center", justifyContent:"center", padding:0}}>
+                                +
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </>
+      )}
+
+      {showAddStore && (
+        <div style={styles2.popupOverlay}>
+          <div style={{...styles2.popupBox, minWidth:420, maxWidth:480, alignItems:"stretch", gap:10}}>
+            <div style={{fontSize:16, fontWeight:800, marginBottom:4}}>+ 매장 추가</div>
+            {[
+              ["본부","본부"], ["대리점코드","대리점코드"], ["대리점명","대리점명"],
+              ["매장코드","매장코드"], ["매장명","매장명"], ["단면양면","단면/양면"], ["슬롯","도광판슬롯"], ["이전수량","이전 수량"],
+            ].map(([field,label])=>(
+              <div key={field} style={{display:"flex", flexDirection:"column", gap:4}}>
+                <label style={{fontSize:11.5, color:"#888", fontWeight:600}}>{label}</label>
+                <input
+                  type={field==="이전수량"?"number":"text"}
+                  value={addStoreForm[field]}
+                  onChange={e=>setAddStoreForm(prev=>({...prev,[field]:e.target.value}))}
+                  style={{...numInput, width:"100%", textAlign:"left"}}
+                />
+              </div>
+            ))}
+            <div style={{display:"flex", gap:10, marginTop:8}}>
+              <button style={{...styles2.popupBtn, background:"#aaa", color:"#333", flex:1}}
+                onClick={()=>setShowAddStore(false)}>취소</button>
+              <button style={{...styles2.popupBtn, flex:1}}
+                onClick={()=>{
+                  if (!addStoreForm.매장코드) return;
+                  addStoreRow(addStoreForm);
+                  setShowAddStore(false);
+                }}>추가</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const DRAFT_TAB = "__draft__";
+
+// 라지그래픽 매장 엑셀 파싱 공용 함수 — "Summary" 시트를 건너뛰고 '매장코드' 열이 있는 시트를 찾아 파싱
+// 헤더 앵커: '매장코드'가 있으면 우선 쓰고, 없으면 '매장명'만으로도 시트/헤더를 인식
+function hasLargeGfxAnchor(rows) {
+  return rows.some(r => Array.isArray(r) && r.some(c => { const s=String(c||"").trim(); return s==="매장코드" || s==="매장명"; }));
+}
+
+function parseLargeGfxWorkbook(arrayBuffer) {
+  const wb = XLSX.read(arrayBuffer, {type:"array"});
+  const dataSheetName = wb.SheetNames.find(name => hasLargeGfxAnchor(XLSX.utils.sheet_to_json(wb.Sheets[name], {header:1})))
+    || wb.SheetNames[wb.SheetNames.length-1];
+  const ws = wb.Sheets[dataSheetName];
+  const rows = XLSX.utils.sheet_to_json(ws, {header:1});
+  const headerRowIdx = rows.findIndex(r => Array.isArray(r) && r.some(c => { const s=String(c||"").trim(); return s==="매장코드" || s==="매장명"; }));
+  if (headerRowIdx < 0) throw new Error("'매장코드' 또는 '매장명' 열을 찾을 수 없습니다. 매장 목록 시트가 맞는지 확인해주세요.");
+  const headerRow = rows[headerRowIdx] || [];
+  const colIdx = (name) => headerRow.findIndex(c => String(c||"").trim()===name);
+  const colIdxIncludes = (needle) => headerRow.findIndex(c => String(c||"").trim().toUpperCase().includes(needle.toUpperCase()));
+  const storeCodeCol = colIdx("매장코드"); // 없으면 -1 — 매장코드 없이도 업로드 진행
+  const storeNameCol = colIdx("매장명");
+  const addressCol   = colIdx("주소");
+  const surveyCol    = colIdx("실사가능여부");
+  const szoneCol     = colIdx("S.ZONE 여부");
+  const noteCol      = colIdx("비고");
+  const accpCol      = colIdxIncludes("ACCP");
+  const mktgCol      = (storeCodeCol >= 0 ? storeCodeCol : storeNameCol) - 1; // 마케팅담당/본부 — 앵커 열 바로 앞(원본에 헤더명 없음)
+  // 매장코드가 비어있는 행도 있을 수 있으므로, 매장명이나 매장코드 중 하나라도 있으면 포함
+  const dataRows = rows.slice(headerRowIdx+1).filter(r=>(storeNameCol>=0 && r[storeNameCol]) || (storeCodeCol>=0 && r[storeCodeCol]));
+  return dataRows.map((r,i) => ({
+    id: Date.now()+i,
+    순번: r[0],
+    본부: guessGtmRegion(r[mktgCol], "") || String(r[mktgCol]||"").trim() || "-",
+    매장코드: storeCodeCol>=0 ? String(r[storeCodeCol]||"").trim() : "",
+    매장명: storeNameCol>=0 ? r[storeNameCol] : "",
+    주소: addressCol>=0 ? r[addressCol] : "",
+    실사가능: surveyCol>=0 ? r[surveyCol] : "",
+    SZONE: szoneCol>=0 ? r[szoneCol] : "",
+    비고: noteCol>=0 ? r[noteCol] : "",
+    ACCP매장: accpCol>=0 ? r[accpCol] : "",
+  }));
+}
+
+function GTMLargeGfx({ rounds, setRounds, draft, setDraft, photos, setPhotos, compareOverrides, setCompareOverrides, isAdmin, submissions, setSubmissions }) {
+  const fileRef = useRef(null);
+  const [activeRoundTab, setActiveRoundTab] = useState(DRAFT_TAB);
+  const [uploadStatus, setUploadStatus] = useState(null);
+  const [hqFilter, setHqFilter] = useState("전체");
+  const [photoPopupCode, setPhotoPopupCode] = useState(null);
+  const [showAddStore, setShowAddStore] = useState(false);
+  const [addStoreForm, setAddStoreForm] = useState({ 본부:"", 매장코드:"", 매장명:"", 주소:"" });
+  const [showFinalize, setShowFinalize] = useState(false);
+  const [showBaseModal, setShowBaseModal] = useState(false);
+  const [finalizeName, setFinalizeName] = useState("");
+  const [showSubmitNote, setShowSubmitNote] = useState(false);
+  const [submitNote, setSubmitNote] = useState("");
+
+  const isDraft = activeRoundTab === DRAFT_TAB;
+  const activeRound = isDraft ? null : rounds.find(r=>r.name===activeRoundTab);
+  const viewData = isDraft ? draft : (activeRound?.data || []);
+  const setViewData = isDraft ? setDraft : null; // 라운드 탭은 읽기 전용(재업로드로만 교체)
+
+  // O/X 대조 컬럼: 기본값은 지금 보는 라운드 바로 이전(과거) 3개(최신순). 사용자가 3칸을 직접 골라 덮어쓸 수 있음(빈 칸 허용)
+  const activeIdx = isDraft ? rounds.length : rounds.findIndex(r=>r.name===activeRoundTab);
+  const autoCompareNames = activeIdx < 0 ? [] : rounds.slice(Math.max(0, activeIdx-3), activeIdx).reverse().map(r=>r.name);
+  const compareSlots = (compareOverrides[activeRoundTab] || autoCompareNames).slice(0,3);
+  while (compareSlots.length < 3) compareSlots.push(null);
+  const compareRounds = compareSlots.filter(Boolean).map(n=>rounds.find(r=>r.name===n)).filter(Boolean);
+  const compareSlotOptions = rounds.filter(r => r.name !== activeRoundTab);
+  const updateCompareSlot = (slotIdx, name) => {
+    const next = compareSlots.slice();
+    next[slotIdx] = name || null;
+    setCompareOverrides(prev => ({ ...prev, [activeRoundTab]: next }));
+  };
+
+  const hqOptions = Array.from(new Set(viewData.map(r=>r.본부).filter(Boolean)));
+  // 아이폰 라운드(아이폰16/아이폰17 등)에서만 의미있는 추가 체크 항목 — 데이터가 있을 때만 컬럼 노출
+  const showAccpCol = viewData.some(r => String(r.ACCP매장||"").trim());
+  const filteredData = hqFilter==="전체" ? viewData : viewData.filter(r=>r.본부===hqFilter);
+
+  const submission = (isDraft && hqFilter!=="전체") ? submissions[hqFilter] : null;
+  const isSubmitted = !!submission?.submitted;
+  const handleSubmitConfirm = () => {
+    if (hqFilter === "전체") return;
+    const note = submitNote.trim();
+    setSubmissions(prev => {
+      const prevSub = prev[hqFilter] || {};
+      const history = [...(prevSub.history||[]), { note, submittedAt: new Date().toISOString() }];
+      return { ...prev, [hqFilter]: { submitted:true, submittedAt:new Date().toISOString(), note, history } };
+    });
+    setSubmitNote("");
+    setShowSubmitNote(false);
+  };
+  const handleCancelSubmit = () => {
+    if (hqFilter === "전체") return;
+    setSubmissions(prev => ({ ...prev, [hqFilter]: { ...(prev[hqFilter]||{}), submitted:false } }));
+  };
+
+  const openTab = (name) => {
+    if (name === DRAFT_TAB && isAdmin) {
+      // 이미 작업 중인 초안이 있어도 다시 눌러서 기반 리스트를 다시 고르고 덮어쓸 수 있도록 매번 확인 (관리자 전용)
+      setActiveRoundTab(DRAFT_TAB);
+      setHqFilter("전체");
+      setShowBaseModal(true);
+      return;
+    }
+    setHqFilter("전체");
+    setActiveRoundTab(name);
+  };
+
+  const startDraftFrom = (roundName) => {
+    if (roundName) {
+      const base = rounds.find(r=>r.name===roundName);
+      setDraft(base ? base.data.map((r,i)=>({ ...r, id: Date.now()+i })) : []);
+    } else {
+      setDraft([]);
+    }
+    setSubmissions({}); // 새 기반 리스트로 엎어쓰면 이전 제출 기록은 더 이상 유효하지 않으므로 초기화
+    setShowBaseModal(false);
+  };
+
+  // 라운드 탭(비확정) 전용 업로드 — 해당 라운드 데이터를 통째로 교체
+  const handleUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file || !activeRound) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      try {
+        const parsed = parseLargeGfxWorkbook(ev.target.result);
+        setRounds(prev => prev.map(r => r.name===activeRound.name ? { ...r, data: parsed } : r));
+        setUploadStatus({type:"success", msg:`${parsed.length}개 매장 로드 완료`});
+      } catch(err) {
+        setUploadStatus({type:"error", msg: err.message});
+      }
+    };
+    reader.readAsArrayBuffer(file);
+    e.target.value="";
+  };
+
+  const updateDraftRow = (id, field, val) => {
+    setDraft(prev => prev.map(r => r.id===id ? {...r, [field]:val} : r));
+  };
+  const deleteDraftRow = (id) => {
+    setDraft(prev => prev.filter(r => r.id!==id));
+  };
+  const addDraftRow = () => {
+    if (!addStoreForm.매장코드 && !addStoreForm.매장명) return;
+    setDraft(prev => [...prev, { id: Date.now(), 순번:"", ...addStoreForm, 비고:"" }]);
+    setAddStoreForm({ 본부:"", 매장코드:"", 매장명:"", 주소:"" });
+    setShowAddStore(false);
+  };
+
+  const handleFinalize = () => {
+    const name = finalizeName.trim();
+    if (!name) return;
+    setRounds(prev => [...prev, {
+      id: `${name}_${Date.now()}`, name, label: `${name} 선정매장`,
+      data: draft.map((r,i)=>({...r, id: Date.now()+i})),
+      locked: true, finalizedAt: new Date().toISOString(),
+    }]);
+    setFinalizeName("");
+    setShowFinalize(false);
+    setActiveRoundTab(name);
+  };
+
+  // 다른 라운드에 이 매장이 있었는지 O/X (매장코드가 있으면 매장코드로, 없으면 매장명으로 대조. 그 라운드가 비어있으면 "-")
+  const CompareCell = ({ round, row }) => {
+    if (!round.data || round.data.length === 0) return <span style={{color:"#ccc"}}>-</span>;
+    const code = String(row.매장코드||"").trim();
+    const name = String(row.매장명||"").trim();
+    const has = code
+      ? round.data.some(r=>String(r.매장코드||"").trim()===code)
+      : (name ? round.data.some(r=>String(r.매장명||"").trim()===name) : false);
+    return has
+      ? <span style={{color:"#2e8b57", fontWeight:800}}>O</span>
+      : <span style={{color:"#c00", fontWeight:800}}>X</span>;
+  };
+
+  const OXField = ({ row, field }) => {
+    if (!isDraft) {
+      const v = String(row[field]||"").trim();
+      if (v==="O") return <span style={{color:"#2e8b57", fontWeight:800}}>O</span>;
+      if (v==="X") return <span style={{color:"#c00", fontWeight:800}}>X</span>;
+      return <span style={{color:"#ccc"}}>-</span>;
+    }
+    const v = String(row[field]||"").trim();
+    return (
+      <select
+        value={v}
+        onChange={e=>updateDraftRow(row.id, field, e.target.value)}
+        style={{
+          padding:"4px 6px", borderRadius:6, border:"1px solid #ddd", fontSize:12, fontWeight:800,
+          background:"#fff", cursor:"pointer",
+          color: v==="O" ? "#2e8b57" : v==="X" ? "#c00" : "#aaa",
+        }}>
+        <option value="">-</option>
+        <option value="O">O</option>
+        <option value="X">X</option>
+      </select>
+    );
+  };
+
+  const photoPopupRow = photoPopupCode ? viewData.find(r=>r.매장코드===photoPopupCode) : null;
+
+  return (
+    <div style={{display:"flex", flexDirection:"column", gap:16}}>
+      {/* 라운드 탭: 신규 → 최신 → 과거 순 */}
+      <div style={{display:"flex", gap:6, flexWrap:"wrap"}}>
+        <button onClick={()=>openTab(DRAFT_TAB)} style={{
+          padding:"8px 16px", borderRadius:50, border:"none", cursor:"pointer", fontSize:12.5, fontWeight:700,
+          background: isDraft ? "#e8420a" : "#ffe8e0",
+          color: isDraft ? "#fff" : "#e8420a",
+        }}>
+          + 신규 라지그래픽 선정
+        </button>
+        {[...rounds].reverse().map(r => (
+          <button key={r.name} onClick={()=>openTab(r.name)} style={{
+            padding:"8px 16px", borderRadius:50, border:"none", cursor:"pointer", fontSize:12.5, fontWeight:700,
+            background: activeRoundTab===r.name ? "#1d6fa4" : "#e0e6ed",
+            color: activeRoundTab===r.name ? "#fff" : "#444",
+          }}>
+            {r.label}{r.locked && " 🔒"}
+          </button>
+        ))}
+      </div>
+
+      {isDraft && isAdmin && hqOptions.length > 0 && (
+        <div style={{background:"#fff", borderRadius:14, boxShadow:"0 2px 16px rgba(0,0,0,0.07)", padding:20}}>
+          <div style={{fontSize:14, fontWeight:800, marginBottom:12, color:"#333"}}>✅ 사업부별 제출 현황(관리자 전용)</div>
+          <div style={{overflowX:"auto"}}>
+            <table style={{borderCollapse:"collapse", width:"100%", minWidth:480, fontSize:12.5}}>
+              <thead>
+                <tr style={{background:"#f0f4f8"}}>
+                  <th style={tH}>유통사업부</th>
+                  <th style={tH}>제출여부</th>
+                  <th style={tH}>제출 일시</th>
+                  <th style={{...tH, minWidth:220}}>제출 히스토리</th>
+                </tr>
+              </thead>
+              <tbody>
+                {hqOptions.map((hq,i)=>{
+                  const sub = submissions[hq];
+                  const history = sub?.history || [];
+                  return (
+                    <tr key={hq} style={{background:i%2===0?"#fafafa":"#fff"}}>
+                      <td style={{...tD, textAlign:"center", fontWeight:700}}>{hq}</td>
+                      <td style={{...tD, textAlign:"center"}}>
+                        {sub?.submitted
+                          ? <span style={{color:"#2e8b57", fontWeight:700}}>✅ 제출완료</span>
+                          : <span style={{color:"#aaa"}}>⏳ 미제출</span>}
+                      </td>
+                      <td style={{...tD, textAlign:"center", color:"#666"}}>
+                        {sub?.submittedAt ? new Date(sub.submittedAt).toLocaleString('ko-KR') : "-"}
+                      </td>
+                      <td style={tD}>
+                        {history.length === 0 ? (
+                          <span style={{color:"#ccc"}}>-</span>
+                        ) : (
+                          <div style={{display:"flex", flexDirection:"column", gap:4, maxHeight:80, overflowY:"auto"}}>
+                            {[...history].reverse().map((h,j)=>(
+                              <div key={j} style={{fontSize:11}}>
+                                <span style={{color:"#999"}}>{new Date(h.submittedAt).toLocaleString('ko-KR')}</span>
+                                {h.note && <span style={{color:"#444"}}> — {h.note}</span>}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {!isDraft && !activeRound?.locked && (
+        <div style={{background:"#fff", borderRadius:14, boxShadow:"0 2px 16px rgba(0,0,0,0.07)", padding:24}}>
+          <div style={{fontSize:15, fontWeight:800, marginBottom:10}}>📂 {activeRoundTab} 선정 매장 업로드</div>
+          <div style={{fontSize:12, color:"#888", marginBottom:12}}>
+            {activeRoundTab} 때 라지그래픽 선정 매장 엑셀을 업로드하면 이 탭의 목록이 통째로 교체됩니다.
+          </div>
+          <div style={{display:"flex", gap:8, alignItems:"center", flexWrap:"wrap"}}>
+            <button style={{...settingsBtn("#1d6fa4"), padding:"7px 18px", fontSize:12}}
+              onClick={()=>fileRef.current?.click()}>📂 파일 선택</button>
+            <input ref={fileRef} type="file" accept=".xlsx,.xls" style={{display:"none"}} onChange={handleUpload}/>
+            {uploadStatus && (
+              <span style={{fontSize:12, padding:"5px 12px", borderRadius:8,
+                background:uploadStatus.type==="success"?"#e8f8ee":"#fff0f0",
+                color:uploadStatus.type==="success"?"#2e8b57":"#c00"}}>
+                {uploadStatus.type==="success"?"✅ ":"❌ "}{uploadStatus.msg}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {!isDraft && activeRound?.locked && (
+        <div style={{background:"#fff8f0", borderRadius:14, padding:"12px 20px", fontSize:12.5, color:"#e85d26"}}>
+          🔒 {activeRoundTab} 선정 매장은 확정된 히스토리입니다 ({new Date(activeRound.finalizedAt).toLocaleString('ko-KR')} 확정) — 조회 전용이며 수정할 수 없습니다.
+        </div>
+      )}
+
+      {isDraft && (
+        <div style={{background:"#fff", borderRadius:14, boxShadow:"0 2px 16px rgba(0,0,0,0.07)", padding:16,
+          display:"flex", gap:8, alignItems:"center", flexWrap:"wrap"}}>
+          <span style={{fontSize:12, color:"#888"}}>현재 작업 중인 신규 선정 리스트입니다. 매장을 추가/수정/삭제한 뒤, 준비되면 관리자가 이름을 정해 확정하세요.</span>
+          <button onClick={()=>setShowAddStore(true)}
+            style={{...settingsBtn("#1d6fa4"), padding:"7px 14px", fontSize:12, marginLeft:"auto"}}>+ 매장 추가</button>
+          {isAdmin && (
+            <button onClick={()=>setShowFinalize(true)}
+              style={{...settingsBtn("#2e8b57"), padding:"7px 14px", fontSize:12}}>✅ 최종 확정</button>
+          )}
+        </div>
+      )}
+
+      {compareSlotOptions.length > 0 && (
+        <div style={{background:"#fff", borderRadius:14, boxShadow:"0 2px 16px rgba(0,0,0,0.07)", padding:16,
+          display:"flex", gap:10, alignItems:"center", flexWrap:"wrap"}}>
+          <span style={{fontSize:12.5, fontWeight:700, color:"#444"}}>O/X 비교 라운드</span>
+          {[0,1,2].map(i=>(
+            <select key={i} value={compareSlots[i]||""} onChange={e=>updateCompareSlot(i, e.target.value)}
+              style={{padding:"6px 10px", borderRadius:8, border:"1px solid #ddd",
+                fontSize:12, fontWeight:600, color:"#444", background:"#fff", cursor:"pointer"}}>
+              <option value="">비워짐</option>
+              {compareSlotOptions.map(r=>(
+                <option key={r.name} value={r.name}>{r.name}</option>
+              ))}
+            </select>
+          ))}
+        </div>
+      )}
+
+      {viewData.length > 0 && (
+        <>
+          <div style={{display:"flex", gap:8, alignItems:"center", flexWrap:"wrap"}}>
+            <span style={{fontSize:13, fontWeight:700, color:"#444"}}>📋 선정 매장 ({viewData.length})</span>
+            {hqOptions.length > 0 && (
+              <select value={hqFilter} onChange={e=>setHqFilter(e.target.value)}
+                style={{marginLeft:"auto", padding:"7px 14px", borderRadius:8, border:"1px solid #ddd",
+                  fontSize:12.5, fontWeight:600, color:"#444", background:"#fff", cursor:"pointer"}}>
+                <option value="전체">전체 본부 ({viewData.length})</option>
+                {hqOptions.map(hq=>(
+                  <option key={hq} value={hq}>{hq} ({viewData.filter(r=>r.본부===hq).length})</option>
+                ))}
+              </select>
+            )}
+            {isDraft && hqFilter !== "전체" && (
+              <>
+                {isSubmitted && (
+                  <span style={{fontSize:12, fontWeight:700, color:"#2e8b57", background:"#e8f8ee",
+                    padding:"6px 12px", borderRadius:8}}>
+                    ✅ 제출완료 ({new Date(submission.submittedAt).toLocaleString('ko-KR')})
+                  </span>
+                )}
+                <button
+                  onClick={()=> isSubmitted ? handleCancelSubmit() : setShowSubmitNote(true)}
+                  style={{...settingsBtn(isSubmitted?"#aaa":"#e8420a"), padding:"7px 18px", fontSize:12.5}}>
+                  {isSubmitted ? "제출 취소" : "제출하기"}
+                </button>
+              </>
+            )}
+          </div>
+
+          <div style={{background:"#fff", borderRadius:14, boxShadow:"0 2px 16px rgba(0,0,0,0.07)", overflow:"hidden"}}>
+            <div style={{overflowX:"auto"}}>
+              <table style={{borderCollapse:"collapse", width:"100%", minWidth:900+compareRounds.length*80, fontSize:12}}>
+                <thead>
+                  <tr style={{background:"#f0f4f8"}}>
+                    <th style={tH}>#</th>
+                    <th style={tH}>본부</th>
+                    <th style={tH}>매장코드</th>
+                    <th style={{...tH, minWidth:140}}>매장명</th>
+                    <th style={{...tH, minWidth:180}}>주소</th>
+                    {compareRounds.map(r=>(<th key={r.name} style={tH}>{r.name}</th>))}
+                    {showAccpCol && <th style={tH}>ACCP 매장</th>}
+                    <th style={{...tH, minWidth:140}}>비고</th>
+                    <th style={{...tH, minWidth:110}}>전면사진</th>
+                    <th style={{...tH, minWidth:100}}>지도</th>
+                    {isDraft && <th style={{...tH, width:50}}>삭제</th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredData.map((row,i)=>{
+                    const imgs = photos[row.매장코드] || [];
+                    return (
+                      <tr key={row.id} style={{background:i%2===0?"#fafafa":"#fff"}}>
+                        <td style={{...tD, textAlign:"center", color:"#aaa"}}>{i+1}</td>
+                        <td style={{...tD, textAlign:"center"}}>{row.본부}</td>
+                        <td style={{...tD, fontSize:11, color:"#666"}}>{row.매장코드}</td>
+                        <td style={{...tD, fontWeight:600}}>{row.매장명}</td>
+                        <td style={{...tD, fontSize:11, color:"#666"}}>{row.주소}</td>
+                        {compareRounds.map(r=>(
+                          <td key={r.name} style={{...tD, textAlign:"center"}}><CompareCell round={r} row={row} /></td>
+                        ))}
+                        {showAccpCol && <td style={{...tD, textAlign:"center"}}><OXField row={row} field="ACCP매장" /></td>}
+                        <td style={tD}>
+                          {isDraft ? (
+                            <input type="text" value={row.비고||""} placeholder="-"
+                              onChange={e=>updateDraftRow(row.id,"비고",e.target.value)}
+                              style={{...numInput, width:"100%", textAlign:"left", fontSize:11}} />
+                          ) : (row.비고||"-")}
+                        </td>
+                        <td style={{...tD, textAlign:"center"}}>
+                          <button
+                            onClick={()=>setPhotoPopupCode(row.매장코드)}
+                            style={{...settingsBtn(imgs.length>0?"#2e8b57":"#888"), padding:"5px 12px", fontSize:11.5}}>
+                            📷 {imgs.length>0 ? `${imgs.length}장` : "등록"}
+                          </button>
+                        </td>
+                        <td style={{...tD, textAlign:"center"}}>
+                          <a
+                            href={`https://map.naver.com/p/search/${encodeURIComponent(row.매장명||"")}`}
+                            target="_blank" rel="noopener noreferrer"
+                            style={{...settingsBtn("#03c75a"), padding:"5px 12px", fontSize:11.5,
+                              textDecoration:"none", display:"inline-block"}}>
+                            지도로 보기
+                          </a>
+                        </td>
+                        {isDraft && (
+                          <td style={{...tD, textAlign:"center"}}>
+                            <button onClick={()=>deleteDraftRow(row.id)}
+                              style={{width:24, height:24, borderRadius:"50%", border:"none", background:"#c00",
+                                color:"#fff", fontSize:13, fontWeight:800, cursor:"pointer", lineHeight:1}}>×</button>
+                          </td>
+                        )}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+
+      {photoPopupRow && (
+        <SianPopup
+          itemId={photoPopupRow.매장코드}
+          itemName={photoPopupRow.매장명}
+          images={photos[photoPopupRow.매장코드] || []}
+          isAdmin={isAdmin}
+          onSave={(imgs)=>{ setPhotos(prev=>({...prev, [photoPopupRow.매장코드]: imgs})); setPhotoPopupCode(null); }}
+          onClose={()=>setPhotoPopupCode(null)}
+        />
+      )}
+
+      {showAddStore && (
+        <div style={styles2.popupOverlay}>
+          <div style={{...styles2.popupBox, minWidth:380, maxWidth:440, alignItems:"stretch", gap:10}}>
+            <div style={{fontSize:16, fontWeight:800, marginBottom:4}}>+ 매장 추가</div>
+            {[["본부","본부"],["매장코드","매장코드"],["매장명","매장명"],["주소","주소"]].map(([field,label])=>(
+              <div key={field} style={{display:"flex", flexDirection:"column", gap:4}}>
+                <label style={{fontSize:11.5, color:"#888", fontWeight:600}}>{label}</label>
+                <input type="text" value={addStoreForm[field]}
+                  onChange={e=>setAddStoreForm(prev=>({...prev,[field]:e.target.value}))}
+                  style={{...numInput, width:"100%", textAlign:"left"}} />
+              </div>
+            ))}
+            <div style={{display:"flex", gap:10, marginTop:8}}>
+              <button style={{...styles2.popupBtn, background:"#aaa", color:"#333", flex:1}}
+                onClick={()=>setShowAddStore(false)}>취소</button>
+              <button style={{...styles2.popupBtn, flex:1}} onClick={addDraftRow}>추가</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showSubmitNote && (
+        <div style={styles2.popupOverlay}>
+          <div style={{...styles2.popupBox, minWidth:400, maxWidth:460, alignItems:"stretch", gap:10}}>
+            <div style={{fontSize:16, fontWeight:800, marginBottom:4}}>제출하기</div>
+            <div style={{fontSize:12.5, color:"#888"}}>이번에 수정한 내용을 간단히 남겨주세요 (히스토리로 기록됩니다).</div>
+            <textarea
+              value={submitNote} onChange={e=>setSubmitNote(e.target.value)}
+              placeholder="예) 20번 매장 삭제하고 OO대리점 OO점 추가했습니다."
+              rows={4}
+              style={{...numInput, width:"100%", textAlign:"left", resize:"vertical", fontFamily:"inherit"}} />
+            <div style={{display:"flex", gap:10, marginTop:8}}>
+              <button style={{...styles2.popupBtn, background:"#aaa", color:"#333", flex:1}}
+                onClick={()=>{setShowSubmitNote(false); setSubmitNote("");}}>취소</button>
+              <button style={{...styles2.popupBtn, flex:1, background:"linear-gradient(135deg,#e8420a,#ff6b35)"}}
+                onClick={handleSubmitConfirm}>제출하기</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showFinalize && (
+        <div style={styles2.popupOverlay}>
+          <div style={{...styles2.popupBox, minWidth:380, maxWidth:440, alignItems:"stretch", gap:10}}>
+            <div style={{fontSize:16, fontWeight:800, marginBottom:4}}>✅ 최종 확정</div>
+            <div style={{fontSize:12.5, color:"#888"}}>어떤 이름으로 저장하시겠습니까? (예: 폴더블8)</div>
+            <input type="text" value={finalizeName} placeholder="라운드 이름 입력"
+              onChange={e=>setFinalizeName(e.target.value)}
+              style={{...numInput, width:"100%", textAlign:"left"}} />
+            <div style={{fontSize:11, color:"#e85d26"}}>확정 후에는 이 리스트를 수정/삭제할 수 없고, 히스토리 조회 및 다른 라운드의 O/X 대조 기준으로만 사용됩니다.</div>
+            <div style={{display:"flex", gap:10, marginTop:8}}>
+              <button style={{...styles2.popupBtn, background:"#aaa", color:"#333", flex:1}}
+                onClick={()=>{setShowFinalize(false); setFinalizeName("");}}>취소</button>
+              <button style={{...styles2.popupBtn, flex:1, background:"linear-gradient(135deg,#2e8b57,#1d6fa4)"}}
+                onClick={handleFinalize}>확정</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showBaseModal && (
+        <div style={styles2.popupOverlay}>
+          <div style={{...styles2.popupBox, minWidth:380, maxWidth:440, alignItems:"stretch", gap:10}}>
+            <div style={{fontSize:16, fontWeight:800, marginBottom:4}}>어떤 리스트를 기반으로 시작할까요?</div>
+            <div style={{fontSize:12.5, color:"#888", marginBottom:4}}>선택한 라운드의 매장 목록을 복사해서 신규 선정 작업을 시작합니다.</div>
+            {draft.length > 0 && (
+              <div style={{fontSize:11.5, color:"#e85d26", background:"#fff8f0", padding:"8px 10px", borderRadius:8}}>
+                ⚠️ 지금 작업 중인 신규 선정 리스트({draft.length}개 매장)가 선택한 리스트로 덮어써집니다.
+              </div>
+            )}
+            <div style={{display:"flex", flexDirection:"column", gap:8}}>
+              {[...rounds].reverse().filter(r=>r.data.length>0).map(r=>(
+                <button key={r.name} onClick={()=>startDraftFrom(r.name)}
+                  style={{...settingsBtn("#1d6fa4"), width:"100%", padding:"10px 14px", fontSize:13, textAlign:"left"}}>
+                  {r.label} ({r.data.length}개 매장)
+                </button>
+              ))}
+              <button onClick={()=>startDraftFrom(null)}
+                style={{...settingsBtn("#888"), width:"100%", padding:"10px 14px", fontSize:13, textAlign:"left"}}>
+                빈 리스트로 시작
+              </button>
+            </div>
+            <button style={{...styles2.popupBtn, background:"#aaa", color:"#333", marginTop:8}}
+              onClick={()=>setShowBaseModal(false)}>취소</button>
+          </div>
+        </div>
       )}
     </div>
   );
