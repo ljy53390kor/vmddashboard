@@ -4236,6 +4236,8 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
   const selectedOption = filterOptions.find(o => o.key === hqFilter);
   const filteredData = hqFilter==="전체" ? data : data.filter(selectedOption ? selectedOption.predicate : ()=>true);
   const filteredMissingStores = hqFilter==="전체" ? missingStores : missingStores.filter(selectedOption ? selectedOption.predicate : ()=>true);
+  // 필터 드롭다운의 개수 표시는 현재 보고 있는 섹션(전체 목록 vs 누락 매장) 기준이어야 한다.
+  const filterCountSource = (isStore && activeSection === "missing") ? missingStores : data;
 
   const handleUpload = (e) => {
     const file = e.target.files[0];
@@ -4318,6 +4320,18 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
             // 데이터 전체가 바뀌었으므로 기존 제출 현황(전체 목록/누락 매장)도 모두 초기화
             setSubmissions({});
           } else {
+            // 자기 소속이 아닌 본부의 파일을 올리면 튕기기: 파일 자체에 적힌 본부 값이
+            // 선택한 uploadRegion과 다른 행이 하나라도 있으면 업로드를 거부한다.
+            const fileRegions = new Set(
+              dataRows
+                .map(r => normalizeGtmRegion(get(r, hqCol, 1)))
+                .filter(Boolean)
+            );
+            const mismatched = [...fileRegions].filter(r => r !== uploadRegion);
+            if (mismatched.length > 0) {
+              setUploadStatus({type:"error", msg:`선택한 소속(${uploadRegion})과 다른 본부(${mismatched.join(", ")})의 데이터가 파일에 포함되어 있어 업로드를 거부했습니다. 본인 소속 파일만 업로드해주세요.`});
+              return;
+            }
             // 일반 계정은 선택한 본부 소속 데이터만 교체하고 다른 본부 데이터는 그대로 유지
             setData(prev => [...prev.filter(r=>r.본부 !== uploadRegion), ...parsed]);
             // 그 본부의 데이터가 바뀌었으므로 그 본부의 제출 현황만 초기화
@@ -4364,10 +4378,11 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
           return;
         }
         const dataRows = rows.slice(1).filter(r=>r[storeCodeCol]);
-        const parsed = dataRows.map(r => {
+        const parsed = dataRows.map((r,i) => {
           const mktgHQ = String(mktgCol>=0 ? (r[mktgCol]||"") : "");
           const team   = String(teamCol>=0 ? (r[teamCol]||"") : "");
           return {
+            id: Date.now()+i, // 매장코드가 중복될 수 있어 행 식별은 별도 id로 (체크박스 등 개별 수정용)
             매장코드: String(r[storeCodeCol]||"").trim(),
             매장명: String(storeNameCol>=0 ? (r[storeNameCol]||"") : ""),
             대리점코드: String(agentCodeCol>=0 ? (r[agentCodeCol]||"") : "").trim(),
@@ -4395,8 +4410,8 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
     setData(prev => prev.filter(r => r.id!==id));
   };
 
-  const updateNewStore = (매장코드, field, val) => {
-    setNewStoreList(prev => prev.map(r => r.매장코드===매장코드 ? {...r, [field]:val} : r));
+  const updateNewStore = (id, field, val) => {
+    setNewStoreList(prev => prev.map(r => r.id===id ? {...r, [field]:val} : r));
   };
 
   // 전체 목록에 매장 한 건 추가 (누락 매장에서 "추가" 또는 "매장 추가" 버튼으로 진입)
@@ -4609,9 +4624,9 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
               <select value={hqFilter} onChange={e=>setHqFilter(e.target.value)}
                 style={{marginLeft:"auto", padding:"7px 14px", borderRadius:8, border:"1px solid #ddd",
                   fontSize:12.5, fontWeight:600, color:"#444", background:"#fff", cursor:"pointer"}}>
-                <option value="전체">전체 ({data.length})</option>
+                <option value="전체">전체 ({filterCountSource.length})</option>
                 {filterOptions.map(opt=>(
-                  <option key={opt.key} value={opt.key}>{opt.label} ({data.filter(opt.predicate).length})</option>
+                  <option key={opt.key} value={opt.key}>{opt.label} ({filterCountSource.filter(opt.predicate).length})</option>
                 ))}
               </select>
             )}
@@ -4803,7 +4818,7 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
                       </thead>
                       <tbody>
                         {filteredMissingStores.map((s,i)=>(
-                          <tr key={s.매장코드+i} style={{background:i%2===0?"#fafafa":"#fff"}}>
+                          <tr key={s.id ?? s.매장코드+i} style={{background:i%2===0?"#fafafa":"#fff"}}>
                             <td style={{...tD, textAlign:"center", color:"#aaa"}}>{i+1}</td>
                             <td style={{...tD, textAlign:"center"}}>{s.본부||"-"}</td>
                             <td style={{...tD, fontSize:11, color:"#666"}}>{s.매장코드}</td>
@@ -4813,7 +4828,7 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
                                 <input type="checkbox"
                                   disabled={inputsLocked}
                                   checked={!!s.확인여부}
-                                  onChange={e=>updateNewStore(s.매장코드,"확인여부",e.target.checked)}
+                                  onChange={e=>updateNewStore(s.id,"확인여부",e.target.checked)}
                                   style={{width:16,height:16,accentColor:"#e85d26"}} />
                                 <span style={{fontSize:11,color:s.확인여부?"#e85d26":"#aaa"}}>
                                   {s.확인여부?"확인":"미확인"}
@@ -4824,7 +4839,7 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
                               <input style={{...numInput, width:"100%", textAlign:"left", opacity: inputsLocked?0.6:1}}
                                 disabled={inputsLocked}
                                 value={s.비고||""} placeholder="비고 입력"
-                                onChange={e=>updateNewStore(s.매장코드,"비고",e.target.value)} />
+                                onChange={e=>updateNewStore(s.id,"비고",e.target.value)} />
                             </td>
                             <td style={{...tD, textAlign:"center"}}>
                               <button
