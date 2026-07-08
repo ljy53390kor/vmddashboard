@@ -4197,6 +4197,14 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
   const [addStoreForm, setAddStoreForm] = useState({ 구분:"", 본부:"", 대리점코드:"", 대리점명:"", 매장코드:"", 매장명:"", 단면양면:"", 슬롯:"", 이전수량:"" });
   const isStore = variant === "store";
 
+  // 예전에 업로드되어 id 필드가 없는 신설 매장 리스트(레거시 데이터)를 한 번만 채워준다.
+  // id가 없으면 여러 행이 undefined===undefined로 매칭되어 체크박스 등이 한꺼번에 바뀌는 문제가 생긴다.
+  useEffect(() => {
+    if (isStore && setNewStoreList && newStoreList && newStoreList.some(r => r.id == null)) {
+      setNewStoreList(prev => prev.map((r,i) => r.id == null ? { ...r, id: Date.now()+i } : r));
+    }
+  }, [isStore, newStoreList, setNewStoreList]);
+
   // 데이터에 있는 매장코드 목록
   const wcCodeSet = new Set(data.map(r => String(r.매장코드||"").trim()));
   // 신설 매장 리스트 중 아직 이 데이터에 반영되지 않은 매장
@@ -4254,6 +4262,7 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
         const ws = wb.Sheets[wb.SheetNames[0]];
         const rows = XLSX.utils.sheet_to_json(ws, {header:1});
         let parsed;
+        let fileHqRegions = null;
         if (isStore) {
           // 헤더 행을 텍스트로 찾아서 열 위치를 인식 (공백 유무 등 표기가 조금씩 달라도 안전하게 대응)
           const norm = (s) => String(s||"").replace(/\s+/g,"");
@@ -4278,6 +4287,8 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
           const startRow = headerRowIdx >= 0 ? headerRowIdx+1 : 2;
           const get = (r, idx, fallbackIdx) => (idx>=0 ? r[idx] : r[fallbackIdx]);
           const dataRows = rows.slice(startRow).filter(r => (storeCodeCol>=0 ? r[storeCodeCol] : r[5]) != null);
+          // 파일 자체에 적힌 본부 값(검증용). uploadRegion으로 강제 덮어쓰기 전의 원본 값을 별도로 남겨둔다.
+          fileHqRegions = new Set(dataRows.map(r => normalizeGtmRegion(get(r, hqCol, 1))).filter(Boolean));
           parsed = dataRows.map((r,i) => {
             const qty = get(r, qtyCol, 10);
             return {
@@ -4322,12 +4333,7 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
           } else {
             // 자기 소속이 아닌 본부의 파일을 올리면 튕기기: 파일 자체에 적힌 본부 값이
             // 선택한 uploadRegion과 다른 행이 하나라도 있으면 업로드를 거부한다.
-            const fileRegions = new Set(
-              dataRows
-                .map(r => normalizeGtmRegion(get(r, hqCol, 1)))
-                .filter(Boolean)
-            );
-            const mismatched = [...fileRegions].filter(r => r !== uploadRegion);
+            const mismatched = [...(fileHqRegions||[])].filter(r => r !== uploadRegion);
             if (mismatched.length > 0) {
               setUploadStatus({type:"error", msg:`선택한 소속(${uploadRegion})과 다른 본부(${mismatched.join(", ")})의 데이터가 파일에 포함되어 있어 업로드를 거부했습니다. 본인 소속 파일만 업로드해주세요.`});
               return;
