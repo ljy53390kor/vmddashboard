@@ -127,7 +127,7 @@ const DOW_KR = ["일","월","화","수","목","금","토"];
 export default function App() {
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
-  const [theme, setTheme] = useState(() => localStorage.getItem('vmd-theme') || 'dark');
+  const [theme, setTheme] = useState(() => localStorage.getItem('vmd-theme') || 'light');
   // 공휴일 API 로드 완료 여부 (true가 되면 달력 리렌더)
   const [holidaysReady, setHolidaysReady] = useState(false);
 
