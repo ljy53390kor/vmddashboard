@@ -4453,6 +4453,11 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
   const handleReuploadResult = (e) => {
     const file = e.target.files[0];
     if (!file) return;
+    if (isStore && !isAdmin && !uploadRegion) {
+      setReuploadStatus({type:"error", msg:"먼저 어느 본부 소속 데이터인지 선택해주세요."});
+      e.target.value="";
+      return;
+    }
     const reader = new FileReader();
     reader.onload = ev => {
       try {
@@ -4475,6 +4480,14 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
         // 업로드 파일에 포함된 본부(들)는 기존 pool을 통째로 비우고 이 파일 내용으로만 다시 채움
         // (매장코드 매칭 갱신이 아니라, 그 본부 소속 전체를 새 목록으로 교체)
         const regionsInFile = new Set([...updatesByCode.values()].map(f=>f.본부));
+        if (isStore && !isAdmin) {
+          // 자기 소속이 아닌 본부의 파일을 재업로드하면 튕기기
+          const mismatched = [...regionsInFile].filter(r => normalizeGtmRegion(r) !== uploadRegion);
+          if (mismatched.length > 0) {
+            setReuploadStatus({type:"error", msg:`선택한 소속(${uploadRegion})과 다른 본부(${mismatched.join(", ")})의 데이터가 파일에 포함되어 있어 업로드를 거부했습니다. 본인 소속 파일만 업로드해주세요.`});
+            return;
+          }
+        }
         setData(prev => {
           const kept = prev.filter(r => !regionsInFile.has(r.본부));
           const newRows = [...updatesByCode.values()].map((fields,i) => ({ id: Date.now()+i, ...fields }));
