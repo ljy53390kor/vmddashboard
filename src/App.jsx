@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import * as XLSX from "xlsx-js-style";
-import { supabase } from "./lib/supabase";
+import { dataClient } from "./lib/dataClient";
+import { isVmddashboard } from "./lib/target";
 import { loadHolidays } from "./lib/holidays";
 
 const C = {
@@ -261,11 +262,11 @@ export default function App() {
   const [shippingNextColId, setShippingNextColId] = useState(1);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    dataClient.auth.getSession().then(({ data: { session } }) => {
       if (session) fetchProfile(session.user.id);
       else setAuthLoading(false);
     });
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = dataClient.auth.onAuthStateChange((_event, session) => {
       if (session) fetchProfile(session.user.id);
       else { setUser(null); setAuthLoading(false); }
     });
@@ -274,15 +275,15 @@ export default function App() {
 
 
   const fetchProfile = async (userId) => {
-    const { data } = await supabase.from('members').select('*').eq('user_id', userId).single();
+    const { data } = await dataClient.members.fetchProfile(userId);
     if (data) setUser({ id: data.employee_id, role: data.role, name: data.name });
     setAuthLoading(false);
   };
 
   const handleLogout = async () => {
     setUpdatedDates({});
-    await supabase.from('app_data').upsert({ key: 'updated_dates', value: {}, updated_at: new Date().toISOString() });
-    await supabase.auth.signOut();
+    await dataClient.appData.saveKey('updated_dates', {});
+    await dataClient.auth.signOut();
     setUser(null);
   };
 
@@ -292,7 +293,7 @@ export default function App() {
   useEffect(() => {
     if (!user) { setAppDataLoaded(false); return; }
     (async () => {
-      const { data } = await supabase.from('app_data').select('key, value');
+      const { data } = await dataClient.appData.loadAll();
       if (data) {
         const m = Object.fromEntries(data.map(r => [r.key, r.value]));
         if (m.confirmed)            setConfirmed(m.confirmed);
@@ -342,7 +343,7 @@ export default function App() {
   }, [user?.id]);
 
   const saveKey = useCallback(async (key, value) => {
-    const { error } = await supabase.from('app_data').upsert({ key, value, updated_at: new Date().toISOString() });
+    const { error } = await dataClient.appData.saveKey(key, value);
     if (error) console.error('[saveKey] upsert failed:', key, error);
   }, []);
 
@@ -551,7 +552,7 @@ function AuthPage({ theme, onToggle }) {
         <div style={styles.loginTitle}>VMD 배송 관리</div>
         <div style={styles.loginSub}>전국 SK텔레콤 매장 배송 플랫폼</div>
 
-        {tab !== "verify" && (
+        {tab !== "verify" && !isVmddashboard && (
           <div style={authStyles.tabRow}>
             <button style={{...authStyles.tab, ...(tab==="login"?authStyles.tabActive:{})}} onClick={()=>setTab("login")}>로그인</button>
             <button style={{...authStyles.tab, ...(tab==="signup"?authStyles.tabActive:{})}} onClick={()=>setTab("signup")}>회원가입</button>
@@ -577,7 +578,7 @@ function LoginForm() {
   const handleLogin = async () => {
     if (!email || !pw) { setErr("이메일과 비밀번호를 입력하세요."); return; }
     setLoading(true); setErr("");
-    const { error } = await supabase.auth.signInWithPassword({ email, password: pw });
+    const { error } = await dataClient.auth.signInWithPassword({ email, password: pw });
     if (error) {
       if (error.message.includes("Email not confirmed")) setErr("이메일 인증이 완료되지 않았습니다. 메일함을 확인해주세요.");
       else setErr("이메일 또는 비밀번호가 올바르지 않습니다.");
@@ -620,7 +621,7 @@ function SignupForm({ onDone }) {
     if (password !== password2) { setErr("비밀번호가 일치하지 않습니다."); return; }
     if (password.length < 6) { setErr("비밀번호는 6자 이상이어야 합니다."); return; }
     setLoading(true); setErr("");
-    const { error } = await supabase.auth.signUp({
+    const { error } = await dataClient.auth.signUp({
       email, password,
       options: { data: { name, employee_id, phone, role: "regional" } },
     });
@@ -709,42 +710,33 @@ function Dashboard({ user, onLogout, theme, onToggleTheme, confirmed, setConfirm
   // 최근 알림 로드 + Realtime 구독 (마운트 시 1회)
   useEffect(() => {
     // 최근 100개 로드
-    supabase
-      .from('notifications')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(100)
-      .then(({ data }) => {
-        if (data) {
-          setNotifications(data.map(n => ({
-            id: n.id, message: n.message, type: n.type,
-            time: new Date(n.created_at), read: false,
-          })));
-        }
+    dataClient.notifications.list(100).then(({ data }) => {
+      if (data) {
+        setNotifications(data.map(n => ({
+          id: n.id, message: n.message, type: n.type,
+          time: new Date(n.created_at), read: false,
+        })));
+      }
+    });
+
+    // 새 알림 구독 (Vercel: Supabase Realtime, Playground: 10초 폴링) → 모든 접속 클라이언트에 전파
+    const unsubscribe = dataClient.notifications.subscribeInsert(({ new: n }) => {
+      const notif = { id: n.id, message: n.message, type: n.type,
+                      time: new Date(n.created_at), read: false };
+      setNotifications(prev => {
+        if (prev.some(p => p.id === n.id)) return prev; // 중복 방지
+        return [notif, ...prev].slice(0, 100);
       });
+      setToasts(prev => [...prev, { id: n.id, message: n.message, type: n.type }]);
+      setTimeout(() => setToasts(prev => prev.filter(t => t.id !== n.id)), 3500);
+    });
 
-    // Realtime: INSERT 이벤트 → 모든 접속 클라이언트에 실시간 전파
-    const channel = supabase
-      .channel('vmd-notifications')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notifications' },
-        ({ new: n }) => {
-          const notif = { id: n.id, message: n.message, type: n.type,
-                          time: new Date(n.created_at), read: false };
-          setNotifications(prev => {
-            if (prev.some(p => p.id === n.id)) return prev; // 중복 방지
-            return [notif, ...prev].slice(0, 100);
-          });
-          setToasts(prev => [...prev, { id: n.id, message: n.message, type: n.type }]);
-          setTimeout(() => setToasts(prev => prev.filter(t => t.id !== n.id)), 3500);
-        })
-      .subscribe();
-
-    return () => { supabase.removeChannel(channel); };
+    return () => { unsubscribe(); };
   }, []);
 
-  // 알림 추가 → Supabase INSERT (Realtime이 모든 클라이언트에 전파)
+  // 알림 추가 (Vercel: Supabase INSERT+Realtime 전파, Playground: 백엔드 저장+폴링 전파)
   const addNotification = useCallback(async (message, type = 'info') => {
-    const { error } = await supabase.from('notifications').insert({ message, type });
+    const { error } = await dataClient.notifications.insert(message, type);
     if (error) {
       // Supabase 실패 시 로컬 폴백
       const id = Date.now() + Math.random();
@@ -758,11 +750,11 @@ function Dashboard({ user, onLogout, theme, onToggleTheme, confirmed, setConfirm
   const markAllRead = () => setNotifications(prev => prev.map(n => ({...n, read:true})));
   const clearAll    = async () => {
     setNotifications([]);
-    await supabase.from('notifications').delete().gte('id', 0);
+    await dataClient.notifications.deleteAll();
   };
   const dismiss     = async (id) => {
     setNotifications(prev => prev.filter(n => n.id !== id));
-    await supabase.from('notifications').delete().eq('id', id);
+    await dataClient.notifications.deleteOne(id);
   };
   const unread      = notifications.filter(n => !n.read).length;
 
@@ -2200,7 +2192,7 @@ function MailSendPopup({ recipients, mailType, mailData, onClose, onSent }) {
                   const subject = isRevision ? "[VMD] 배송일 수정 공지" : "[VMD] 배송일 공지";
                   const html = buildDeliveryMailHtml({ isRevision, diffRows, dates:mailData?.dates, fmtDate });
                   const to = recipients.map(r => r.email);
-                  const { error } = await supabase.functions.invoke("send-email", { body: { to, subject, html } });
+                  const { error } = await dataClient.mail.sendEmail({ to, subject, html });
                   setSending(false);
                   if (error) { setSendError("발송 실패: " + (error.message || "서버 오류")); return; }
                   setSent(true); onSent?.(mailType);
@@ -2367,7 +2359,7 @@ function SKNMailPopup({ recipients, mailData, onClose, onSent }) {
                   const subject = isRevision ? "[VMD] SKN 배송일 수정 검토 요청" : "[VMD] SKN 배송일 임시 지정 검토 요청";
                   const html = buildSknMailHtml({ isRevision, diffRows, dates:mailData?.dates, fmtDate, fmtRow });
                   const to = recipients.map(r => r.email);
-                  const { error } = await supabase.functions.invoke("send-email", { body: { to, subject, html } });
+                  const { error } = await dataClient.mail.sendEmail({ to, subject, html });
                   setSending(false);
                   if (error) { setSendError("발송 실패: " + (error.message || "서버 오류")); return; }
                   setSent(true);
