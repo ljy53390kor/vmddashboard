@@ -4571,7 +4571,7 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
           기존 {sectionLabel} 배송 리스트 엑셀 파일을 업로드하면 이전 수량이 자동으로 로드됩니다.
           {isStore && (isAdmin
             ? " 관리자는 본부 선택 없이 전체 데이터를 한 번에 업로드합니다."
-            : " 업로드하면 선택한 본부 데이터만 교체되고 다른 본부 데이터는 그대로 유지됩니다.")}
+            : " 최초 업로드는 관리자만 가능하며, 일반 계정은 아래 \"취합 결과 업로드\"로 선택한 본부 데이터만 제출합니다.")}
         </div>
         <div style={{display:"flex", gap:8, alignItems:"center", flexWrap:"wrap"}}>
           {isStore && !isAdmin && (
@@ -4582,9 +4582,13 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
               {WIDECOLOR_UPLOAD_SCOPES.map(r=>(<option key={r} value={r}>{r}</option>))}
             </select>
           )}
-          <button style={{...settingsBtn("#1d6fa4"), padding:"7px 18px", fontSize:12}}
-            onClick={()=>fileRef.current?.click()}>📂 파일 선택</button>
-          <input ref={fileRef} type="file" accept=".xlsx,.xls" style={{display:"none"}} onChange={handleUpload}/>
+          {(!isStore || isAdmin) && (
+            <>
+              <button style={{...settingsBtn("#1d6fa4"), padding:"7px 18px", fontSize:12}}
+                onClick={()=>fileRef.current?.click()}>📂 파일 선택</button>
+              <input ref={fileRef} type="file" accept=".xlsx,.xls" style={{display:"none"}} onChange={handleUpload}/>
+            </>
+          )}
           {data.length > 0 && (
             <button style={{...settingsBtn("#2e8b57"), padding:"7px 18px", fontSize:12}}
               onClick={downloadResult}>⬇ 수량취합 엑셀 다운로드</button>
