@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { createPortal } from "react-dom";
 import * as XLSX from "xlsx-js-style";
 import { dataClient } from "./lib/dataClient";
 import { isVmddashboard } from "./lib/target";
@@ -1493,12 +1494,12 @@ function SchedulePage({ role, confirmed, setConfirmed, tempSelected, setTempSele
                       else handleDayClick(cell.day);
                     }}
                   >
-                    {isToday && <div style={styles.todayRing} />}
-                    {circleColor && (
+                    {isToday && <div style={styles.todayUnderline} />}
+                    {circleColor && !isReleased && (
                       <div style={{
                         ...styles.circle,
                         background: circleColor,
-                        border: isReleased ? "2px dashed #aaa" : "none",
+                        border: "none",
                       }} />
                     )}
                     <span style={{
@@ -2689,10 +2690,39 @@ function SettingsPage({ mailRecipients, setMailRecipients, sknRecipients, setSkn
 // ─── 배송 수량 설정 섹션 ─────────────────────────────────────────────────
 const MULTIPLIERS = [2, 3];
 
+// 본부 → 물류센터 매핑 (표2 커스텀 열의 "입고 수량으로 조정하기" 기능에서 사용)
+const LOGISTICS_GROUPS = [
+  { key:"이천", label:"이천물류",     본부s:["수도권","제주"] },
+  { key:"부산", label:"부산물류",     본부s:["부산"] },
+  { key:"대구", label:"대구물류",     본부s:["대구"] },
+  { key:"광주", label:"광주물류",     본부s:["서부"] },
+  { key:"중부", label:"중부물류(대전)", 본부s:["중부"] },
+];
+
 function ShippingGroupsSection({ shippingGroups, setShippingGroups, table1, setTable1, step, setStep, customCols, setCustomCols, nextColId, setNextColId, setStoreList }) {
   const storeFileRef = useRef(null);
   const [uploadStatus, setUploadStatus] = useState(null);
+  const [logisticsPopup, setLogisticsPopup] = useState(null); // {colId, inputs:{이천,부산,대구,광주,중부}}
   // step, table1, customCols, nextColId는 App에서 props로 받음 (메뉴 전환 시 유지)
+
+  // 물류센터 그룹별 입고 수량(총량)을, 체크박스 활성화된 행들끼리의 기존 비중대로 재분배
+  const applyLogisticsAdjust = (colId, inputs) => {
+    setShippingGroups(prev => {
+      const next = prev.map(r => ({...r}));
+      LOGISTICS_GROUPS.forEach(grp => {
+        const total = Number(inputs[grp.key]) || 0;
+        const activeRows = next.filter(r => grp.본부s.includes(r.본부) && r[`c${colId}`] !== false);
+        if (activeRows.length === 0) return;
+        const curSum = activeRows.reduce((s,r)=>s+(r[`c${colId}Val`]||0),0);
+        activeRows.forEach(r => {
+          r[`c${colId}Val`] = curSum > 0
+            ? Math.round((r[`c${colId}Val`]||0) / curSum * total)
+            : Math.round(total / activeRows.length);
+        });
+      });
+      return next;
+    });
+  };
 
   // 시도명 → 지역본부 매핑
   const sidoToRegion = (sido) => {
@@ -2816,26 +2846,32 @@ function ShippingGroupsSection({ shippingGroups, setShippingGroups, table1, setT
 
       return prev.map(row => {
         const t1row = table1.find(r => r.구분===row.구분 && r.본부===row.본부);
+        let next = row;
         if (!t1row) {
           // 대형 행: 표1 지역본부-수도권의 대형유통 값 사용
           if (row.구분==="대형") {
             const dv = table1.find(r=>r.본부==="수도권"&&r.구분==="지역본부")?.대형유통 ?? 0;
-            return {...row, 기본값: dv, g1:null, g2:null, g3:1, g4:1};
+            next = {...row, 기본값: dv, g1:null, g2:null, g3:1, g4:1};
           }
           // 택배배송: 수기 입력 유지
-          return row;
-        }
-        // 지역본부/PS&M: 102% 조정값 + 도매값
-        if (row.구분==="지역본부" || row.구분==="PS&M") {
-          return {...row, 기본값: t1row.adj102 ?? t1row.소매매장 ?? row.기본값,
+        } else if (row.구분==="지역본부" || row.구분==="PS&M") {
+          // 지역본부/PS&M: 102% 조정값 + 도매값
+          next = {...row, 기본값: t1row.adj102 ?? t1row.소매매장 ?? row.기본값,
                          도매값: t1row.도매 ?? 0};
-        }
-        // Biz: 표1 지역본부 행의 biz 수기 입력값 (같은 본부)
-        if (row.구분==="Biz") {
+        } else if (row.구분==="Biz") {
+          // Biz: 표1 지역본부 행의 biz 수기 입력값 (같은 본부)
           const bizT1 = table1.find(r => r.본부===row.본부 && r.구분==="지역본부");
-          return {...row, 기본값: bizT1?.biz ?? 0};
+          next = {...row, 기본값: bizT1?.biz ?? 0};
         }
-        return row;
+        // 잠금 해제(🔓)된 커스텀 열은 새 기본값×배수로 자동 재계산.
+        // 잠긴(🔒) 열은 손대지 않아 표1 변경의 영향을 받지 않는다.
+        for (const col of customCols) {
+          if (col.locked === false) {
+            next = next===row ? {...row} : next;
+            next[`c${col.id}Val`] = Math.round((next.기본값||0) * (col.mult||1));
+          }
+        }
+        return next;
       });
     });
     setStep("table2");
@@ -2956,8 +2992,8 @@ function ShippingGroupsSection({ shippingGroups, setShippingGroups, table1, setT
                               <div style={{display:"flex",alignItems:"center",gap:4,justifyContent:"center"}}>
                                 <span style={{color:"#aaa",fontSize:11}}>={row.소매매장}×102%→</span>
                                 <input type="number" min="0" style={{...numInput,width:60,color:"#1d6fa4",fontWeight:700}}
-                                  value={row.adj102||""}
-                                  onChange={e=>updateT1(row.id,"adj102",parseInt(e.target.value)||0)} />
+                                  value={row.adj102 ?? ""}
+                                  onChange={e=>updateT1(row.id,"adj102", e.target.value==="" ? 0 : parseInt(e.target.value)||0)} />
                               </div>
                             ) : <span style={{color:"#ccc"}}>-</span>}
                           </td>
@@ -2969,8 +3005,8 @@ function ShippingGroupsSection({ shippingGroups, setShippingGroups, table1, setT
                             {row.biz===null
                               ? <span style={{color:"#aaa",fontSize:11}}>비활성화</span>
                               : <input type="number" min="0" style={numInput}
-                                  value={row.biz||""} placeholder="0"
-                                  onChange={e=>updateT1(row.id,"biz",parseInt(e.target.value)||0)} />
+                                  value={row.biz ?? ""} placeholder="0"
+                                  onChange={e=>updateT1(row.id,"biz", e.target.value==="" ? 0 : parseInt(e.target.value)||0)} />
                             }
                           </td>
                           {/* 대형유통: 지역본부-수도권만 활성 */}
@@ -2978,15 +3014,15 @@ function ShippingGroupsSection({ shippingGroups, setShippingGroups, table1, setT
                             {row.대형유통===null
                               ? <span style={{color:"#aaa",fontSize:11}}>비활성화</span>
                               : <input type="number" min="0" style={numInput}
-                                  value={row.대형유통||""} placeholder="0"
-                                  onChange={e=>updateT1(row.id,"대형유통",parseInt(e.target.value)||0)} />
+                                  value={row.대형유통 ?? ""} placeholder="0"
+                                  onChange={e=>updateT1(row.id,"대형유통", e.target.value==="" ? 0 : parseInt(e.target.value)||0)} />
                             }
                           </td>
                           {/* 도매 */}
                           <td style={{...tD,textAlign:"center"}}>
                             <input type="number" min="0" style={numInput}
-                              value={row.도매||""} placeholder="0"
-                              onChange={e=>updateT1(row.id,"도매",parseInt(e.target.value)||0)} />
+                              value={row.도매 ?? ""} placeholder="0"
+                              onChange={e=>updateT1(row.id,"도매", e.target.value==="" ? 0 : parseInt(e.target.value)||0)} />
                           </td>
                         </tr>
                       ));
@@ -3028,10 +3064,16 @@ function ShippingGroupsSection({ shippingGroups, setShippingGroups, table1, setT
           <div style={{display:"flex", gap:10, justifyContent:"flex-end", marginBottom:12, flexWrap:"wrap"}}>
             <button style={{...settingsBtn("#1d6fa4"), padding:"7px 18px", fontSize:12}}
               onClick={()=>{
-                const label=`커스텀${nextColId}`;
-                setCustomCols(prev=>[...prev,{id:nextColId,label,mult:1}]);
+                // 현재 남아있는 열들의 이름을 기준으로 비어있는 가장 작은 번호를 붙인다
+                // (예: 커스텀1을 지웠다가 다시 만들면 커스텀1부터 다시 채워짐)
+                const usedLabels = new Set(customCols.map(c=>c.label));
+                let n = 1;
+                while (usedLabels.has(`커스텀${n}`)) n++;
+                const label = `커스텀${n}`;
+                const newId = nextColId;
+                setCustomCols(prev=>[...prev,{id:newId,label,mult:1,locked:true}]);
                 setNextColId(n=>n+1);
-                setShippingGroups(prev=>prev.map(r=>({...r,[`c${nextColId}`]:true})));
+                setShippingGroups(prev=>prev.map(r=>({...r,[`c${newId}`]:true,[`c${newId}Val`]:Math.round((r.기본값||0)*1)})));
               }}>+ 열 추가 커스텀</button>
             {customCols.length > 0 && (
               <button style={{...settingsBtn("#e85d26"), padding:"7px 18px", fontSize:12}}
@@ -3071,6 +3113,19 @@ function ShippingGroupsSection({ shippingGroups, setShippingGroups, table1, setT
                   {/* 커스텀 열: X1 X2 X3 일괄 버튼 */}
                   {customCols.map(col=>(
                     <th key={col.id} style={tH}>
+                      <button
+                        title={col.locked!==false
+                          ? "잠김: 표1에서 \"기본값으로 컨펌하기\"를 다시 눌러도 이 열의 수량은 그대로 유지됩니다 (직접 수정은 언제든 가능). 클릭하면 잠금 해제"
+                          : "해제됨: 표1에서 다시 컨펌하면 기본값×배수로 자동 재계산됩니다 (그 전까지는 직접 수정 가능). 클릭하면 다시 잠금"}
+                        style={{border:"none",background:"transparent",cursor:"pointer",marginRight:3,fontSize:13,padding:0}}
+                        onClick={()=>{
+                          const willLock = col.locked===false; // 현재 해제 상태면 → 잠그는 전환
+                          setCustomCols(prev=>prev.map(c=>c.id===col.id?{...c,locked:willLock}:c));
+                          if (willLock) {
+                            // 잠그는 순간의 계산값을 스냅샷으로 저장해서 그 이후로는 표1과 무관하게 유지
+                            setShippingGroups(prev=>prev.map(r=>({...r,[`c${col.id}Val`]:Math.round((r.기본값||0)*(col.mult||1))})));
+                          }
+                        }}>{col.locked!==false ? "🔒" : "🔓"}</button>
                       <input style={{width:64,border:"1px solid #ddd",borderRadius:6,
                         padding:"2px 4px",fontSize:11,textAlign:"center"}}
                         value={col.label}
@@ -3079,13 +3134,27 @@ function ShippingGroupsSection({ shippingGroups, setShippingGroups, table1, setT
                         onClick={()=>setCustomCols(prev=>prev.filter(c=>c.id!==col.id))}>×</button>
                       <div style={{display:"flex",gap:2,justifyContent:"center",marginTop:4}}>
                         {[1,2,3].map(m=>(
-                          <button key={m} style={{
+                          <button key={m} title="현재 기본값 기준으로 전체 행에 일괄 적용" style={{
                             background:col.mult===m?"#1d6fa4":"#e8eef5",
                             color:col.mult===m?"#fff":"#333",
                             border:"none",borderRadius:10,padding:"2px 7px",fontSize:10,fontWeight:700,cursor:"pointer"}}
-                            onClick={()=>setCustomCols(prev=>prev.map(c=>c.id===col.id?{...c,mult:m}:c))}>×{m}</button>
+                            onClick={()=>{
+                              setCustomCols(prev=>prev.map(c=>c.id===col.id?{...c,mult:m}:c));
+                              setShippingGroups(prev=>prev.map(r=>({...r,[`c${col.id}Val`]:Math.round((r.기본값||0)*m)})));
+                            }}>×{m}</button>
                         ))}
                       </div>
+                      <button title="물류센터별 입고 수량을 입력하면, 활성화(체크)된 행들끼리의 기존 비중대로 나눠 반영합니다"
+                        style={{...settingsBtn("#2e8b57"),marginTop:4,padding:"2px 6px",fontSize:10,width:"100%"}}
+                        onClick={()=>{
+                          const init = {};
+                          LOGISTICS_GROUPS.forEach(g=>{
+                            init[g.key] = shippingGroups
+                              .filter(r=>g.본부s.includes(r.본부) && r[`c${col.id}`]!==false)
+                              .reduce((s,r)=>s+(r[`c${col.id}Val`]||0),0);
+                          });
+                          setLogisticsPopup({colId:col.id, colLabel:col.label, inputs:init});
+                        }}>📦 입고수량 조정</button>
                     </th>
                   ))}
                 </tr>
@@ -3108,7 +3177,7 @@ function ShippingGroupsSection({ shippingGroups, setShippingGroups, table1, setT
                   </td>
                   {customCols.map(col=>(
                     <td key={col.id} style={{...tD,textAlign:"center",color:"#1d6fa4"}}>
-                      {shippingGroups.filter(r=>r.active&&r[`c${col.id}`]!==false).reduce((s,r)=>s+Math.round((r.기본값||0)*(col.mult||1)),0)}
+                      {shippingGroups.filter(r=>r.active&&r[`c${col.id}`]!==false).reduce((s,r)=>s+(r[`c${col.id}Val`]||0),0)}
                     </td>
                   ))}
                 </tr>
@@ -3132,8 +3201,8 @@ function ShippingGroupsSection({ shippingGroups, setShippingGroups, table1, setT
                       <td style={{...tD,textAlign:"center"}}>
                         {row.구분==="택배배송"
                           ? <input type="number" min="0" style={{...numInput,width:60}}
-                              value={row.기본값||""} placeholder="0"
-                              onChange={e=>setShippingGroups(prev=>prev.map(r=>r.id===row.id?{...r,기본값:parseInt(e.target.value)||0}:r))} />
+                              value={row.기본값 ?? ""} placeholder="0"
+                              onChange={e=>setShippingGroups(prev=>prev.map(r=>r.id===row.id?{...r,기본값:e.target.value===""?0:parseInt(e.target.value)||0}:r))} />
                           : <><span style={{fontWeight:700,color:"#1d6fa4",fontSize:13}}>{row.기본값||0}</span>
                             <div style={{fontSize:10,color:"#aaa"}}>102% 조정값</div></>
                         }
@@ -3171,14 +3240,19 @@ function ShippingGroupsSection({ shippingGroups, setShippingGroups, table1, setT
                             </div>
                         }
                       </td>
-                      {/* 커스텀 열: 체크박스 + 배수 */}
+                      {/* 커스텀 열: 잠금 상태와 무관하게 항상 수량 직접 입력 가능.
+                          🔒 잠김 = 표1을 다시 컨펌해도 이 값 유지. 🔓 해제 = 표1 재컨펌 시 기본값×배수로 자동 재계산(그 전까지는 자유 수정 가능). */}
                       {customCols.map(col=>(
                         <td key={col.id} style={{...tD,textAlign:"center"}}>
                           <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
-                            <span style={{fontWeight:700,color:row[`c${col.id}`]===false?"#ccc":"#1d6fa4",fontSize:13,
-                              textDecoration:row[`c${col.id}`]===false?"line-through":"none"}}>
-                              {Math.round((row.기본값||0)*(col.mult||1))}
-                            </span>
+                            <input type="number" min="0" style={{...numInput,width:56,
+                              color:row[`c${col.id}`]===false?"#ccc":"#1d6fa4",fontWeight:700,
+                              textDecoration:row[`c${col.id}`]===false?"line-through":"none"}}
+                              value={row[`c${col.id}Val`] ?? 0}
+                              onChange={e=>{
+                                const v = parseInt(e.target.value)||0;
+                                setShippingGroups(prev=>prev.map(r=>r.id===row.id?{...r,[`c${col.id}Val`]:v}:r));
+                              }} />
                             <input type="checkbox" checked={row[`c${col.id}`]!==false} style={{width:16,height:16,accentColor:"#2e8b57",cursor:"pointer"}}
                               onChange={e=>setShippingGroups(prev=>prev.map(r=>r.id===row.id?{...r,[`c${col.id}`]:e.target.checked}:r))} />
                           </div>
@@ -3191,6 +3265,41 @@ function ShippingGroupsSection({ shippingGroups, setShippingGroups, table1, setT
             </table>
           </div>
         </>
+      )}
+
+      {/* 입고 수량으로 조정하기 팝업 */}
+      {logisticsPopup && (
+        <div style={styles2.popupOverlay}>
+          <div style={{...styles2.popupBox, minWidth:340, gap:14, alignItems:"stretch"}}>
+            <div style={{fontSize:16, fontWeight:800}}>📦 입고 수량으로 조정 — {logisticsPopup.colLabel}</div>
+            <div style={{fontSize:11.5, color:"#888"}}>
+              물류센터별 입고 수량을 입력하면, 해당 물류센터로 가는 본부들 중 체크박스가 활성화된 행들끼리
+              현재 수량의 비중대로 나눠서 반영됩니다.
+            </div>
+            {LOGISTICS_GROUPS.map(g=>(
+              <div key={g.key} style={{display:"flex", alignItems:"center", justifyContent:"space-between", gap:10}}>
+                <label style={{fontSize:13, fontWeight:600, color:"#333"}}>{g.label}</label>
+                <input type="number" min="0" style={{...numInput, width:100}}
+                  value={logisticsPopup.inputs[g.key] ?? ""}
+                  onChange={e=>{
+                    // 입력 중에는 원본 문자열을 그대로 보관 (즉시 숫자로 강제 변환하면
+                    // 지웠을 때 0이 남아있다가 뒤에 이어 쓰는 값과 붙어버리는 문제가 생김)
+                    const raw = e.target.value;
+                    setLogisticsPopup(prev=>({...prev, inputs:{...prev.inputs, [g.key]: raw===""?"":raw}}));
+                  }} />
+              </div>
+            ))}
+            <div style={{display:"flex", gap:10, marginTop:4}}>
+              <button style={{...styles2.popupBtn, background:"#aaa", color:"#333", flex:1}}
+                onClick={()=>setLogisticsPopup(null)}>취소</button>
+              <button style={{...styles2.popupBtn, flex:1}}
+                onClick={()=>{
+                  applyLogisticsAdjust(logisticsPopup.colId, logisticsPopup.inputs);
+                  setLogisticsPopup(null);
+                }}>적용</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -3351,8 +3460,14 @@ function HQItemsPage({ hqItems, setHqItems, shippingGroups, confirmed, role, shi
   // hqItems 중 assignedDate가 현재 deliveryDates에 없는 것들
   const confirmedKeys = new Set(deliveryDates.map(([k])=>k));
 
-  // 현재 activeTab이 없으면 첫 번째 배송일로 초기화
-  const effectiveTab = activeTab || (deliveryDates[0]?.[0] ?? "pending");
+  // 현재 activeTab이 없으면 오늘 이후(오늘 포함) 가장 가까운 배송일로 초기화.
+  // 남은 배송일이 없으면(모두 지난 경우) 가장 최근 배송일로 대체.
+  const todayKey = (() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+  })();
+  const upcomingTab = deliveryDates.find(([k]) => k >= todayKey)?.[0];
+  const effectiveTab = activeTab || upcomingTab || deliveryDates[deliveryDates.length-1]?.[0] || "pending";
 
   const fmtDate = (k) => {
     if (!k) return "-";
@@ -3812,7 +3927,7 @@ function HQItemsPage({ hqItems, setHqItems, shippingGroups, confirmed, role, shi
           ...shippingCustomCols.map(col=>({
             label: col.label,
             key: `c${col.id}`,
-            total: activeRows.filter(r=>r[`c${col.id}`]!==false).reduce((s,r)=>s+Math.round((r.기본값||0)*(col.mult||1)),0),
+            total: activeRows.filter(r=>r[`c${col.id}`]!==false).reduce((s,r)=>s+(r[`c${col.id}Val`]||0),0),
           })),
         ].filter(g=>g.total>0);
         return (
@@ -5506,6 +5621,14 @@ function SianPopup({ itemId, itemName, images, isAdmin, onSave, onClose }) {
     });
     e.target.value="";
   };
+  const handleDownload = img => {
+    const a = document.createElement("a");
+    a.href = img.dataUrl;
+    a.download = img.name || "시안.png";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
   return (
     <div style={styles2.popupOverlay}>
       <div style={{...styles2.popupBox,minWidth:420,maxWidth:560,gap:14,maxHeight:"85vh",overflowY:"auto"}}>
@@ -5524,6 +5647,9 @@ function SianPopup({ itemId, itemName, images, isAdmin, onSave, onClose }) {
                   <img src={img.dataUrl} alt={img.name} style={{width:"100%",height:120,objectFit:"cover"}}/>
                   <div style={{fontSize:11,color:"#666",padding:"4px 6px",background:"#f8f8f8",
                     overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{img.name}</div>
+                  <button title="다운로드" style={{position:"absolute",top:4,right:isAdmin?28:4,background:"rgba(0,0,0,0.5)",
+                    color:"#fff",border:"none",borderRadius:"50%",width:20,height:20,fontSize:11,cursor:"pointer"}}
+                    onClick={e=>{e.stopPropagation();handleDownload(img);}}>⬇</button>
                   {isAdmin && (
                     <button style={{position:"absolute",top:4,right:4,background:"rgba(0,0,0,0.5)",
                       color:"#fff",border:"none",borderRadius:"50%",width:20,height:20,fontSize:12,cursor:"pointer"}}
@@ -5539,11 +5665,17 @@ function SianPopup({ itemId, itemName, images, isAdmin, onSave, onClose }) {
             ? <button style={{...styles2.popupBtn,flex:1}} onClick={()=>onSave(localImgs)}>저장</button>
             : <button style={{...styles2.popupBtn,flex:1}} onClick={onClose}>닫기</button>}
         </div>
-        {viewImg && (
+        {viewImg && createPortal(
           <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:10000,
             display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>setViewImg(null)}>
-            <img src={viewImg.dataUrl} alt={viewImg.name} style={{maxWidth:"90vw",maxHeight:"90vh",borderRadius:8,objectFit:"contain"}}/>
-          </div>
+            <div style={{position:"relative"}} onClick={e=>e.stopPropagation()}>
+              <img src={viewImg.dataUrl} alt={viewImg.name} style={{maxWidth:"90vw",maxHeight:"90vh",borderRadius:8,objectFit:"contain",display:"block"}}/>
+              <button title="다운로드" style={{position:"absolute",top:10,right:10,background:"rgba(0,0,0,0.6)",
+                color:"#fff",border:"none",borderRadius:8,padding:"6px 12px",fontSize:13,cursor:"pointer"}}
+                onClick={()=>handleDownload(viewImg)}>⬇ 다운로드</button>
+            </div>
+          </div>,
+          document.body
         )}
       </div>
     </div>
@@ -5718,10 +5850,12 @@ const styles = {
     position:"absolute", width:34, height:34, borderRadius:"50%",
     top:"50%", left:"50%", transform:"translate(-50%,-50%)", zIndex:1,
   },
-  todayRing: {
-    position:"absolute", width:34, height:34, borderRadius:"50%",
-    border:`2px solid ${C.blue}`, top:"50%", left:"50%",
-    transform:"translate(-50%,-50%)", zIndex:0,
+  // "오늘" 표시는 원/링 형태로 만들면 확정(빨간 원)·선택 중(파란 원)·해제 표시와 계속 헷갈리므로
+  // 원이 아닌 아래쪽 작은 밑줄로만 표시한다.
+  todayUnderline: {
+    position:"absolute", width:16, height:3, borderRadius:2,
+    background:"#94a3b8", left:"50%", bottom:4,
+    transform:"translateX(-50%)", zIndex:0,
   },
   dayNum: { fontSize:13, position:"relative", zIndex:2, fontWeight:500 },
   holDot: { fontSize:7, position:"absolute", bottom:3, right:3, opacity:0.7 },
