@@ -318,6 +318,27 @@ export default function App() {
         if (m.updated_dates)        setUpdatedDates(m.updated_dates);
         if (m.pre_edit_snap)        setPreEditSnap(m.pre_edit_snap);
         if (m.last_skn_confirmed)   setLastSKNConfirmed(m.last_skn_confirmed);
+
+        // confirmed 자체는 비어있는데(과거 저장 폭주로 인한 실패 추정) 스냅샷들(SKN 컨펌
+        // 이력 등)은 남아있는 경우, 캘린더 원 표시가 "확정 일정" 목록과 어긋나 보인다.
+        // 스냅샷으로부터 confirmed를 복구하고 즉시 저장해서 다음부터는 정상 로드되게 한다.
+        const hasRealConfirmed = m.confirmed && Object.keys(m.confirmed).length > 0;
+        if (!hasRealConfirmed) {
+          const snapSources = [m.last_skn_confirmed, m.skn_confirmed_snap, m.pre_edit_snap].filter(Boolean);
+          const rebuilt = {};
+          snapSources.forEach(snapByPeriod => {
+            Object.values(snapByPeriod).forEach(entries => {
+              (entries||[]).forEach(e => {
+                if (e?.key && !rebuilt[e.key]) rebuilt[e.key] = { dow: e.dow, note:"", status:"confirmed" };
+              });
+            });
+          });
+          if (Object.keys(rebuilt).length > 0) {
+            console.warn('[recover] confirmed가 비어있어 스냅샷', Object.keys(rebuilt).length, '건으로 복구합니다.');
+            setConfirmed(rebuilt);
+            saveKey('confirmed', rebuilt);
+          }
+        }
         // last_revision_data는 메모리 전용 — 로그인마다 초기화되도록 로드하지 않음
         if (m.mail_recipients)      setMailRecipients(m.mail_recipients);
         if (m.skn_recipients)       setSknRecipients(m.skn_recipients);
