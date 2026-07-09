@@ -2703,6 +2703,7 @@ function ShippingGroupsSection({ shippingGroups, setShippingGroups, table1, setT
   const storeFileRef = useRef(null);
   const [uploadStatus, setUploadStatus] = useState(null);
   const [logisticsPopup, setLogisticsPopup] = useState(null); // {colId, inputs:{이천,부산,대구,광주,중부}}
+  const [totalQtyPopup, setTotalQtyPopup] = useState(null); // {colId, colLabel, total}
   // step, table1, customCols, nextColId는 App에서 props로 받음 (메뉴 전환 시 유지)
 
   // 물류센터 그룹별 입고 수량(총량)을, 체크박스 활성화된 행들끼리의 기존 비중대로 재분배
@@ -2721,6 +2722,22 @@ function ShippingGroupsSection({ shippingGroups, setShippingGroups, table1, setT
         });
       });
       return next;
+    });
+  };
+
+  // 총 수량을 체크박스 활성화된 행들끼리의 기존 비중대로 재분배 (물류센터 구분 없이 전체)
+  const applyTotalQtyAdjust = (colId, total) => {
+    setShippingGroups(prev => {
+      const activeRows = prev.filter(r => r[`c${colId}`] !== false);
+      if (activeRows.length === 0) return prev;
+      const curSum = activeRows.reduce((s,r)=>s+(r[`c${colId}Val`]||0),0);
+      return prev.map(r => {
+        if (r[`c${colId}`] === false) return r;
+        const newVal = curSum > 0
+          ? Math.round((r[`c${colId}Val`]||0) / curSum * total)
+          : Math.round(total / activeRows.length);
+        return {...r, [`c${colId}Val`]: newVal};
+      });
     });
   };
 
@@ -3155,6 +3172,14 @@ function ShippingGroupsSection({ shippingGroups, setShippingGroups, table1, setT
                           });
                           setLogisticsPopup({colId:col.id, colLabel:col.label, inputs:init});
                         }}>📦 입고수량 조정</button>
+                      <button title="전체 수량을 입력하면, 활성화(체크)된 행들끼리의 기존 비중대로 나눠 반영합니다"
+                        style={{...settingsBtn("#1d6fa4"),marginTop:4,padding:"2px 6px",fontSize:10,width:"100%"}}
+                        onClick={()=>{
+                          const curTotal = shippingGroups
+                            .filter(r=>r[`c${col.id}`]!==false)
+                            .reduce((s,r)=>s+(r[`c${col.id}Val`]||0),0);
+                          setTotalQtyPopup({colId:col.id, colLabel:col.label, total:curTotal});
+                        }}>📦 총 수량으로 조정</button>
                     </th>
                   ))}
                 </tr>
@@ -3296,6 +3321,33 @@ function ShippingGroupsSection({ shippingGroups, setShippingGroups, table1, setT
                 onClick={()=>{
                   applyLogisticsAdjust(logisticsPopup.colId, logisticsPopup.inputs);
                   setLogisticsPopup(null);
+                }}>적용</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 총 수량으로 조정 팝업 */}
+      {totalQtyPopup && (
+        <div style={styles2.popupOverlay}>
+          <div style={{...styles2.popupBox, minWidth:320, gap:14, alignItems:"stretch"}}>
+            <div style={{fontSize:16, fontWeight:800}}>📦 총 수량으로 조정 — {totalQtyPopup.colLabel}</div>
+            <div style={{fontSize:11.5, color:"#888"}}>
+              입력한 총 수량을, 이 열에서 체크박스가 활성화된 행들끼리 현재 수량의 비중대로 나눠서 반영합니다.
+            </div>
+            <input type="number" min="0" style={{...numInput, width:"100%"}}
+              value={totalQtyPopup.total ?? ""}
+              onChange={e=>{
+                const raw = e.target.value;
+                setTotalQtyPopup(prev=>({...prev, total: raw===""?"":raw}));
+              }} />
+            <div style={{display:"flex", gap:10, marginTop:4}}>
+              <button style={{...styles2.popupBtn, background:"#aaa", color:"#333", flex:1}}
+                onClick={()=>setTotalQtyPopup(null)}>취소</button>
+              <button style={{...styles2.popupBtn, flex:1}}
+                onClick={()=>{
+                  applyTotalQtyAdjust(totalQtyPopup.colId, Number(totalQtyPopup.total)||0);
+                  setTotalQtyPopup(null);
                 }}>적용</button>
             </div>
           </div>
