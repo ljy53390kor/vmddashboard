@@ -125,6 +125,21 @@ const INITIAL_CONFIRMED = {
 //         "confirmed" = 빨간 원 (SK 컨펌 완료)
 const DOW_KR = ["일","월","화","수","목","금","토"];
 
+// loadAll() 직후에는 방금 서버에서 막 불러온 값이 상태에 세팅되면서, 그 값을 감시하는
+// 저장용 useEffect가 "변경됐다"고 착각해 곧바로 다시 같은 값을 서버에 재저장해버린다.
+// 로그인 시점에 저장 대상 키가 20개 가까이 되다 보니 이 무의미한 재저장이 전부 한꺼번에
+// 몰려서 (관찰된 응답시간 약 9.75초) 정작 필요한 저장/로딩까지 늦어지는 원인이 됐다.
+// 이 훅은 appDataLoaded가 처음 true가 된 직후의 최초 1회 저장만 건너뛴다.
+function useAutoSave(saveKey, key, value, appDataLoaded) {
+  const skipNextRef = useRef(true);
+  useEffect(() => {
+    if (!appDataLoaded) return;
+    if (skipNextRef.current) { skipNextRef.current = false; return; }
+    saveKey(key, value);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value, appDataLoaded]);
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 export default function App() {
   const [user, setUser] = useState(null);
@@ -344,34 +359,64 @@ export default function App() {
   }, [user?.id]);
 
   const saveKey = useCallback(async (key, value) => {
-    const { error } = await dataClient.appData.saveKey(key, value);
-    if (error) console.error('[saveKey] upsert failed:', key, error);
+    // 백엔드(특히 Supabase) 요청이 응답 없이 무한정 걸려있는 경우가 있어서,
+    // 타임아웃 없이 기다리면 "저장 중..." 스피너가 영원히 안 풀리는 문제가 생긴다.
+    // 일정 시간 안에 응답이 없으면 실패로 간주하고 사용자에게 알린다.
+    let error;
+    try {
+      const result = await Promise.race([
+        dataClient.appData.saveKey(key, value),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('save_timeout')), 15000)),
+      ]);
+      error = result?.error;
+    } catch (e) {
+      error = e;
+    }
+    if (error) {
+      console.error('[saveKey] upsert failed:', key, error);
+      const timedOut = error?.message === 'save_timeout';
+      // 저장 실패가 조용히 무시되면, 다음 새로고침 때 저장 전 상태로 되돌아가면서
+      // 사용자 눈에는 "방금 입력한 내용이 사라졌다"처럼 보이므로 반드시 알림.
+      alert(timedOut
+        ? `저장 요청이 15초 넘게 응답이 없어 실패로 처리했습니다 (${key}). 네트워크 상태를 확인하고 다시 시도해주세요.`
+        : `저장에 실패했습니다 (${key}). 새로고침하면 방금 변경한 내용이 사라질 수 있습니다.\n다시 시도해보시고, 계속되면 관리자에게 알려주세요.`);
+    }
+    return !error;
   }, []);
 
-  useEffect(() => { if (appDataLoaded) saveKey('confirmed', confirmed); }, [confirmed, appDataLoaded]);
-  useEffect(() => { if (appDataLoaded) saveKey('temp_selected', [...tempSelected]); }, [tempSelected, appDataLoaded]);
-  useEffect(() => { if (appDataLoaded) saveKey('skn_confirmed_snap', sknConfirmedSnap); }, [sknConfirmedSnap, appDataLoaded]);
-  useEffect(() => { if (appDataLoaded) saveKey('updated_dates', updatedDates); }, [updatedDates, appDataLoaded]);
-  useEffect(() => { if (appDataLoaded) saveKey('pre_edit_snap', preEditSnap); }, [preEditSnap, appDataLoaded]);
-  useEffect(() => { if (appDataLoaded) saveKey('last_skn_confirmed', lastSKNConfirmed); }, [lastSKNConfirmed, appDataLoaded]);
+  // hqItems는 상태 변경 → useEffect → saveKey 순서로 "발사 후 잊기" 방식으로 저장되는데,
+  // 시안 이미지처럼 용량이 크고 홈 네트워크 등에서 느릴 수 있는 저장은 그 요청이 끝나기 전에
+  // 사용자가 새로고침/다른 화면 이동을 해버리면 저장이 유실된다. 시안 저장만큼은
+  // 저장 완료를 직접 기다렸다가 팝업을 닫도록 별도 헬퍼를 둔다.
+  const saveHqItemsNow = useCallback(async (items) => {
+    setHqItems(items);
+    return await saveKey('hq_items', items);
+  }, [saveKey]);
+
+  useAutoSave(saveKey, 'confirmed', confirmed, appDataLoaded);
+  useAutoSave(saveKey, 'temp_selected', [...tempSelected], appDataLoaded);
+  useAutoSave(saveKey, 'skn_confirmed_snap', sknConfirmedSnap, appDataLoaded);
+  useAutoSave(saveKey, 'updated_dates', updatedDates, appDataLoaded);
+  useAutoSave(saveKey, 'pre_edit_snap', preEditSnap, appDataLoaded);
+  useAutoSave(saveKey, 'last_skn_confirmed', lastSKNConfirmed, appDataLoaded);
   // last_revision_data: 메모리 전용이므로 DB 저장 없음
-  useEffect(() => { if (appDataLoaded) saveKey('mail_recipients', mailRecipients); }, [mailRecipients, appDataLoaded]);
-  useEffect(() => { if (appDataLoaded) saveKey('skn_recipients', sknRecipients); }, [sknRecipients, appDataLoaded]);
-  useEffect(() => { if (appDataLoaded) saveKey('shipping_groups', shippingGroups); }, [shippingGroups, appDataLoaded]);
-  useEffect(() => { if (appDataLoaded) saveKey('hq_items', hqItems); }, [hqItems, appDataLoaded]);
-  useEffect(() => { if (appDataLoaded) saveKey('store_list', storeList); }, [storeList, appDataLoaded]);
-  useEffect(() => { if (appDataLoaded) saveKey('shipping_table1', shippingTable1); }, [shippingTable1, appDataLoaded]);
-  useEffect(() => { if (appDataLoaded) saveKey('shipping_step', shippingStep); }, [shippingStep, appDataLoaded]);
-  useEffect(() => { if (appDataLoaded) saveKey('shipping_custom_cols', shippingCustomCols); }, [shippingCustomCols, appDataLoaded]);
-  useEffect(() => { if (appDataLoaded) saveKey('shipping_next_col_id', shippingNextColId); }, [shippingNextColId, appDataLoaded]);
-  useEffect(() => { if (appDataLoaded) saveKey('gtm_widecolor_data', gtmWideColorData); }, [gtmWideColorData, appDataLoaded]);
-  useEffect(() => { if (appDataLoaded) saveKey('gtm_hanging_data', gtmHangingData); }, [gtmHangingData, appDataLoaded]);
-  useEffect(() => { if (appDataLoaded) saveKey('gtm_submissions', gtmSubmissions); }, [gtmSubmissions, appDataLoaded]);
-  useEffect(() => { if (appDataLoaded) saveKey('gtm_new_store_list', gtmNewStoreList); }, [gtmNewStoreList, appDataLoaded]);
-  useEffect(() => { if (appDataLoaded) saveKey('gtm_largegfx_rounds', gtmLargeGfxRounds); }, [gtmLargeGfxRounds, appDataLoaded]);
-  useEffect(() => { if (appDataLoaded) saveKey('gtm_largegfx_draft', gtmLargeGfxDraft); }, [gtmLargeGfxDraft, appDataLoaded]);
-  useEffect(() => { if (appDataLoaded) saveKey('gtm_largegfx_photos', gtmLargeGfxPhotos); }, [gtmLargeGfxPhotos, appDataLoaded]);
-  useEffect(() => { if (appDataLoaded) saveKey('gtm_largegfx_compare', gtmLargeGfxCompareOverrides); }, [gtmLargeGfxCompareOverrides, appDataLoaded]);
+  useAutoSave(saveKey, 'mail_recipients', mailRecipients, appDataLoaded);
+  useAutoSave(saveKey, 'skn_recipients', sknRecipients, appDataLoaded);
+  useAutoSave(saveKey, 'shipping_groups', shippingGroups, appDataLoaded);
+  useAutoSave(saveKey, 'hq_items', hqItems, appDataLoaded);
+  useAutoSave(saveKey, 'store_list', storeList, appDataLoaded);
+  useAutoSave(saveKey, 'shipping_table1', shippingTable1, appDataLoaded);
+  useAutoSave(saveKey, 'shipping_step', shippingStep, appDataLoaded);
+  useAutoSave(saveKey, 'shipping_custom_cols', shippingCustomCols, appDataLoaded);
+  useAutoSave(saveKey, 'shipping_next_col_id', shippingNextColId, appDataLoaded);
+  useAutoSave(saveKey, 'gtm_widecolor_data', gtmWideColorData, appDataLoaded);
+  useAutoSave(saveKey, 'gtm_hanging_data', gtmHangingData, appDataLoaded);
+  useAutoSave(saveKey, 'gtm_submissions', gtmSubmissions, appDataLoaded);
+  useAutoSave(saveKey, 'gtm_new_store_list', gtmNewStoreList, appDataLoaded);
+  useAutoSave(saveKey, 'gtm_largegfx_rounds', gtmLargeGfxRounds, appDataLoaded);
+  useAutoSave(saveKey, 'gtm_largegfx_draft', gtmLargeGfxDraft, appDataLoaded);
+  useAutoSave(saveKey, 'gtm_largegfx_photos', gtmLargeGfxPhotos, appDataLoaded);
+  useAutoSave(saveKey, 'gtm_largegfx_compare', gtmLargeGfxCompareOverrides, appDataLoaded);
 
   if (authLoading) return (
     <div style={{ display:"flex", alignItems:"center", justifyContent:"center", height:"100vh", background:"#f4f6fb" }}>
@@ -405,6 +450,7 @@ export default function App() {
         setShippingGroups={setShippingGroups}
         hqItems={hqItems}
         setHqItems={setHqItems}
+        saveHqItemsNow={saveHqItemsNow}
         gtmWideColorData={gtmWideColorData}
         setGtmWideColorData={setGtmWideColorData}
         gtmHangingData={gtmHangingData}
@@ -697,7 +743,7 @@ const authStyles = {
 };
 
 // ─── 대쉬보드 ───────────────────────────────────────────────────────────
-function Dashboard({ user, onLogout, theme, onToggleTheme, confirmed, setConfirmed, tempSelected, setTempSelected, onSKConfirm, sknConfirmedSnap, mailRecipients, setMailRecipients, sknRecipients, setSknRecipients, showMailPopup, setShowMailPopup, shippingGroups, setShippingGroups, hqItems, setHqItems, gtmWideColorData, setGtmWideColorData, gtmHangingData, setGtmHangingData, gtmSubmissions, setGtmSubmissions, gtmNewStoreList, setGtmNewStoreList, gtmLargeGfxRounds, setGtmLargeGfxRounds, gtmLargeGfxDraft, setGtmLargeGfxDraft, gtmLargeGfxPhotos, setGtmLargeGfxPhotos, gtmLargeGfxCompareOverrides, setGtmLargeGfxCompareOverrides, storeList, setStoreList, updatedDates, setUpdatedDates, preEditSnap, setPreEditSnap, lastSKNConfirmed, lastRevisionData, setLastRevisionData, shippingTable1, setShippingTable1, shippingStep, setShippingStep, shippingCustomCols, setShippingCustomCols, shippingNextColId, setShippingNextColId }) {
+function Dashboard({ user, onLogout, theme, onToggleTheme, confirmed, setConfirmed, tempSelected, setTempSelected, onSKConfirm, sknConfirmedSnap, mailRecipients, setMailRecipients, sknRecipients, setSknRecipients, showMailPopup, setShowMailPopup, shippingGroups, setShippingGroups, hqItems, setHqItems, saveHqItemsNow, gtmWideColorData, setGtmWideColorData, gtmHangingData, setGtmHangingData, gtmSubmissions, setGtmSubmissions, gtmNewStoreList, setGtmNewStoreList, gtmLargeGfxRounds, setGtmLargeGfxRounds, gtmLargeGfxDraft, setGtmLargeGfxDraft, gtmLargeGfxPhotos, setGtmLargeGfxPhotos, gtmLargeGfxCompareOverrides, setGtmLargeGfxCompareOverrides, storeList, setStoreList, updatedDates, setUpdatedDates, preEditSnap, setPreEditSnap, lastSKNConfirmed, lastRevisionData, setLastRevisionData, shippingTable1, setShippingTable1, shippingStep, setShippingStep, shippingCustomCols, setShippingCustomCols, shippingNextColId, setShippingNextColId }) {
   const [menu, setMenu] = useState("schedule");
   const role = user.role;
   const cfg  = ROLE_CONFIG[role];
@@ -959,6 +1005,7 @@ function Dashboard({ user, onLogout, theme, onToggleTheme, confirmed, setConfirm
           : menu === "hq"
           ? <HQItemsPage
               hqItems={hqItems} setHqItems={setHqItems}
+              saveHqItemsNow={saveHqItemsNow}
               shippingGroups={shippingGroups}
               shippingCustomCols={shippingCustomCols}
               confirmed={confirmed}
@@ -3475,7 +3522,7 @@ function SKNRecipientsSection({ sknRecipients, setSknRecipients }) {
 }
 
 // ─── 본사 배송 물품 페이지 ───────────────────────────────────────────────
-function HQItemsPage({ hqItems, setHqItems, shippingGroups, confirmed, role, shippingCustomCols, addNotification }) {
+function HQItemsPage({ hqItems, setHqItems, saveHqItemsNow, shippingGroups, confirmed, role, shippingCustomCols, addNotification }) {
   const isAdmin = role === "admin";
   const today = new Date();
   // 21일 이후면 다음달 기준 기간(당월21~익월20)으로 초기화
@@ -3958,7 +4005,13 @@ function HQItemsPage({ hqItems, setHqItems, shippingGroups, confirmed, role, shi
           itemName={sianPopup.itemName}
           images={sianPopup.images}
           isAdmin={isAdmin}
-          onSave={(imgs)=>{ updateItem(sianPopup.itemId,"sianImages",imgs); setSianPopup(null); }}
+          onSave={async (imgs)=>{
+            const newItems = hqItems.map(it=>it.id===sianPopup.itemId?{...it,sianImages:imgs}:it);
+            const ok = await saveHqItemsNow(newItems);
+            if (ok) setSianPopup(null);
+            // 실패 시 팝업을 닫지 않고 그대로 둬서 사용자가 다시 저장을 시도할 수 있게 함
+            // (saveHqItemsNow 내부에서 이미 실패 알림을 띄움)
+          }}
           onClose={()=>setSianPopup(null)}
         />
       )}
@@ -5673,6 +5726,18 @@ function SianPopup({ itemId, itemName, images, isAdmin, onSave, onClose }) {
   const [localImgs, setLocalImgs] = useState(images||[]);
   const fileRef = useRef(null);
   const [viewImg, setViewImg] = useState(null);
+  const [saving, setSaving] = useState(false);
+  // 저장이 실제로 끝나기 전에 팝업을 닫아버리면, 사용자가 곧바로 새로고침하거나
+  // 다른 화면으로 이동했을 때 저장 요청이 완료되지 못하고 유실될 수 있다.
+  // 그래서 onSave의 완료를 기다렸다가 닫는다 (호출부에서 실패 시 팝업을 안 닫으면 재시도 가능).
+  const handleSaveClick = async () => {
+    setSaving(true);
+    try {
+      await onSave(localImgs);
+    } finally {
+      setSaving(false);
+    }
+  };
   const handleUpload = e => {
     Array.from(e.target.files).forEach(file=>{
       const reader=new FileReader();
@@ -5720,9 +5785,11 @@ function SianPopup({ itemId, itemName, images, isAdmin, onSave, onClose }) {
             </div>
         }
         <div style={{display:"flex",gap:10,width:"100%"}}>
-          <button style={{...styles2.popupBtn,background:"#aaa",color:"#333",flex:1}} onClick={onClose}>취소</button>
+          <button style={{...styles2.popupBtn,background:"#aaa",color:"#333",flex:1}} onClick={onClose} disabled={saving}>취소</button>
           {isAdmin
-            ? <button style={{...styles2.popupBtn,flex:1}} onClick={()=>onSave(localImgs)}>저장</button>
+            ? <button style={{...styles2.popupBtn,flex:1,opacity:saving?0.6:1}} onClick={handleSaveClick} disabled={saving}>
+                {saving ? "저장 중…" : "저장"}
+              </button>
             : <button style={{...styles2.popupBtn,flex:1}} onClick={onClose}>닫기</button>}
         </div>
         {viewImg && createPortal(

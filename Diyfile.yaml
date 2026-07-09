@@ -31,6 +31,10 @@ properties:
           access_log  /var/log/nginx/access.log  main;
           sendfile        on;
           keepalive_timeout  65;
+          # 시안 이미지 등 base64로 app-data에 저장되는 PUT 요청이 기본 1MB 제한에
+          # 걸려 조용히 413으로 실패하고, 다음 로드 때 저장 전 상태로 되돌아가
+          # "사라진 것처럼" 보이는 문제 방지
+          client_max_body_size 20m;
           # reverse proxy
           server {
               listen 8080;
