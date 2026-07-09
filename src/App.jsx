@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { createPortal } from "react-dom";
 import * as XLSX from "xlsx-js-style";
 import { dataClient } from "./lib/dataClient";
 import { isVmddashboard } from "./lib/target";
@@ -124,21 +123,6 @@ const INITIAL_CONFIRMED = {
 // status: "pending" = 회색 원 (임시 지정, SK 컨펌 대기)
 //         "confirmed" = 빨간 원 (SK 컨펌 완료)
 const DOW_KR = ["일","월","화","수","목","금","토"];
-
-// loadAll() 직후에는 방금 서버에서 막 불러온 값이 상태에 세팅되면서, 그 값을 감시하는
-// 저장용 useEffect가 "변경됐다"고 착각해 곧바로 다시 같은 값을 서버에 재저장해버린다.
-// 로그인 시점에 저장 대상 키가 20개 가까이 되다 보니 이 무의미한 재저장이 전부 한꺼번에
-// 몰려서 (관찰된 응답시간 약 9.75초) 정작 필요한 저장/로딩까지 늦어지는 원인이 됐다.
-// 이 훅은 appDataLoaded가 처음 true가 된 직후의 최초 1회 저장만 건너뛴다.
-function useAutoSave(saveKey, key, value, appDataLoaded) {
-  const skipNextRef = useRef(true);
-  useEffect(() => {
-    if (!appDataLoaded) return;
-    if (skipNextRef.current) { skipNextRef.current = false; return; }
-    saveKey(key, value);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [value, appDataLoaded]);
-}
 
 // ═══════════════════════════════════════════════════════════════════════
 export default function App() {
@@ -318,27 +302,6 @@ export default function App() {
         if (m.updated_dates)        setUpdatedDates(m.updated_dates);
         if (m.pre_edit_snap)        setPreEditSnap(m.pre_edit_snap);
         if (m.last_skn_confirmed)   setLastSKNConfirmed(m.last_skn_confirmed);
-
-        // confirmed 자체는 비어있는데(과거 저장 폭주로 인한 실패 추정) 스냅샷들(SKN 컨펌
-        // 이력 등)은 남아있는 경우, 캘린더 원 표시가 "확정 일정" 목록과 어긋나 보인다.
-        // 스냅샷으로부터 confirmed를 복구하고 즉시 저장해서 다음부터는 정상 로드되게 한다.
-        const hasRealConfirmed = m.confirmed && Object.keys(m.confirmed).length > 0;
-        if (!hasRealConfirmed) {
-          const snapSources = [m.last_skn_confirmed, m.skn_confirmed_snap, m.pre_edit_snap].filter(Boolean);
-          const rebuilt = {};
-          snapSources.forEach(snapByPeriod => {
-            Object.values(snapByPeriod).forEach(entries => {
-              (entries||[]).forEach(e => {
-                if (e?.key && !rebuilt[e.key]) rebuilt[e.key] = { dow: e.dow, note:"", status:"confirmed" };
-              });
-            });
-          });
-          if (Object.keys(rebuilt).length > 0) {
-            console.warn('[recover] confirmed가 비어있어 스냅샷', Object.keys(rebuilt).length, '건으로 복구합니다.');
-            setConfirmed(rebuilt);
-            saveKey('confirmed', rebuilt);
-          }
-        }
         // last_revision_data는 메모리 전용 — 로그인마다 초기화되도록 로드하지 않음
         if (m.mail_recipients)      setMailRecipients(m.mail_recipients);
         if (m.skn_recipients)       setSknRecipients(m.skn_recipients);
@@ -380,64 +343,34 @@ export default function App() {
   }, [user?.id]);
 
   const saveKey = useCallback(async (key, value) => {
-    // 백엔드(특히 Supabase) 요청이 응답 없이 무한정 걸려있는 경우가 있어서,
-    // 타임아웃 없이 기다리면 "저장 중..." 스피너가 영원히 안 풀리는 문제가 생긴다.
-    // 일정 시간 안에 응답이 없으면 실패로 간주하고 사용자에게 알린다.
-    let error;
-    try {
-      const result = await Promise.race([
-        dataClient.appData.saveKey(key, value),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('save_timeout')), 15000)),
-      ]);
-      error = result?.error;
-    } catch (e) {
-      error = e;
-    }
-    if (error) {
-      console.error('[saveKey] upsert failed:', key, error);
-      const timedOut = error?.message === 'save_timeout';
-      // 저장 실패가 조용히 무시되면, 다음 새로고침 때 저장 전 상태로 되돌아가면서
-      // 사용자 눈에는 "방금 입력한 내용이 사라졌다"처럼 보이므로 반드시 알림.
-      alert(timedOut
-        ? `저장 요청이 15초 넘게 응답이 없어 실패로 처리했습니다 (${key}). 네트워크 상태를 확인하고 다시 시도해주세요.`
-        : `저장에 실패했습니다 (${key}). 새로고침하면 방금 변경한 내용이 사라질 수 있습니다.\n다시 시도해보시고, 계속되면 관리자에게 알려주세요.`);
-    }
-    return !error;
+    const { error } = await dataClient.appData.saveKey(key, value);
+    if (error) console.error('[saveKey] upsert failed:', key, error);
   }, []);
 
-  // hqItems는 상태 변경 → useEffect → saveKey 순서로 "발사 후 잊기" 방식으로 저장되는데,
-  // 시안 이미지처럼 용량이 크고 홈 네트워크 등에서 느릴 수 있는 저장은 그 요청이 끝나기 전에
-  // 사용자가 새로고침/다른 화면 이동을 해버리면 저장이 유실된다. 시안 저장만큼은
-  // 저장 완료를 직접 기다렸다가 팝업을 닫도록 별도 헬퍼를 둔다.
-  const saveHqItemsNow = useCallback(async (items) => {
-    setHqItems(items);
-    return await saveKey('hq_items', items);
-  }, [saveKey]);
-
-  useAutoSave(saveKey, 'confirmed', confirmed, appDataLoaded);
-  useAutoSave(saveKey, 'temp_selected', [...tempSelected], appDataLoaded);
-  useAutoSave(saveKey, 'skn_confirmed_snap', sknConfirmedSnap, appDataLoaded);
-  useAutoSave(saveKey, 'updated_dates', updatedDates, appDataLoaded);
-  useAutoSave(saveKey, 'pre_edit_snap', preEditSnap, appDataLoaded);
-  useAutoSave(saveKey, 'last_skn_confirmed', lastSKNConfirmed, appDataLoaded);
+  useEffect(() => { if (appDataLoaded) saveKey('confirmed', confirmed); }, [confirmed, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) saveKey('temp_selected', [...tempSelected]); }, [tempSelected, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) saveKey('skn_confirmed_snap', sknConfirmedSnap); }, [sknConfirmedSnap, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) saveKey('updated_dates', updatedDates); }, [updatedDates, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) saveKey('pre_edit_snap', preEditSnap); }, [preEditSnap, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) saveKey('last_skn_confirmed', lastSKNConfirmed); }, [lastSKNConfirmed, appDataLoaded]);
   // last_revision_data: 메모리 전용이므로 DB 저장 없음
-  useAutoSave(saveKey, 'mail_recipients', mailRecipients, appDataLoaded);
-  useAutoSave(saveKey, 'skn_recipients', sknRecipients, appDataLoaded);
-  useAutoSave(saveKey, 'shipping_groups', shippingGroups, appDataLoaded);
-  useAutoSave(saveKey, 'hq_items', hqItems, appDataLoaded);
-  useAutoSave(saveKey, 'store_list', storeList, appDataLoaded);
-  useAutoSave(saveKey, 'shipping_table1', shippingTable1, appDataLoaded);
-  useAutoSave(saveKey, 'shipping_step', shippingStep, appDataLoaded);
-  useAutoSave(saveKey, 'shipping_custom_cols', shippingCustomCols, appDataLoaded);
-  useAutoSave(saveKey, 'shipping_next_col_id', shippingNextColId, appDataLoaded);
-  useAutoSave(saveKey, 'gtm_widecolor_data', gtmWideColorData, appDataLoaded);
-  useAutoSave(saveKey, 'gtm_hanging_data', gtmHangingData, appDataLoaded);
-  useAutoSave(saveKey, 'gtm_submissions', gtmSubmissions, appDataLoaded);
-  useAutoSave(saveKey, 'gtm_new_store_list', gtmNewStoreList, appDataLoaded);
-  useAutoSave(saveKey, 'gtm_largegfx_rounds', gtmLargeGfxRounds, appDataLoaded);
-  useAutoSave(saveKey, 'gtm_largegfx_draft', gtmLargeGfxDraft, appDataLoaded);
-  useAutoSave(saveKey, 'gtm_largegfx_photos', gtmLargeGfxPhotos, appDataLoaded);
-  useAutoSave(saveKey, 'gtm_largegfx_compare', gtmLargeGfxCompareOverrides, appDataLoaded);
+  useEffect(() => { if (appDataLoaded) saveKey('mail_recipients', mailRecipients); }, [mailRecipients, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) saveKey('skn_recipients', sknRecipients); }, [sknRecipients, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) saveKey('shipping_groups', shippingGroups); }, [shippingGroups, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) saveKey('hq_items', hqItems); }, [hqItems, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) saveKey('store_list', storeList); }, [storeList, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) saveKey('shipping_table1', shippingTable1); }, [shippingTable1, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) saveKey('shipping_step', shippingStep); }, [shippingStep, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) saveKey('shipping_custom_cols', shippingCustomCols); }, [shippingCustomCols, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) saveKey('shipping_next_col_id', shippingNextColId); }, [shippingNextColId, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) saveKey('gtm_widecolor_data', gtmWideColorData); }, [gtmWideColorData, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) saveKey('gtm_hanging_data', gtmHangingData); }, [gtmHangingData, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) saveKey('gtm_submissions', gtmSubmissions); }, [gtmSubmissions, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) saveKey('gtm_new_store_list', gtmNewStoreList); }, [gtmNewStoreList, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) saveKey('gtm_largegfx_rounds', gtmLargeGfxRounds); }, [gtmLargeGfxRounds, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) saveKey('gtm_largegfx_draft', gtmLargeGfxDraft); }, [gtmLargeGfxDraft, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) saveKey('gtm_largegfx_photos', gtmLargeGfxPhotos); }, [gtmLargeGfxPhotos, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) saveKey('gtm_largegfx_compare', gtmLargeGfxCompareOverrides); }, [gtmLargeGfxCompareOverrides, appDataLoaded]);
 
   if (authLoading) return (
     <div style={{ display:"flex", alignItems:"center", justifyContent:"center", height:"100vh", background:"#f4f6fb" }}>
@@ -471,7 +404,6 @@ export default function App() {
         setShippingGroups={setShippingGroups}
         hqItems={hqItems}
         setHqItems={setHqItems}
-        saveHqItemsNow={saveHqItemsNow}
         gtmWideColorData={gtmWideColorData}
         setGtmWideColorData={setGtmWideColorData}
         gtmHangingData={gtmHangingData}
@@ -764,7 +696,7 @@ const authStyles = {
 };
 
 // ─── 대쉬보드 ───────────────────────────────────────────────────────────
-function Dashboard({ user, onLogout, theme, onToggleTheme, confirmed, setConfirmed, tempSelected, setTempSelected, onSKConfirm, sknConfirmedSnap, mailRecipients, setMailRecipients, sknRecipients, setSknRecipients, showMailPopup, setShowMailPopup, shippingGroups, setShippingGroups, hqItems, setHqItems, saveHqItemsNow, gtmWideColorData, setGtmWideColorData, gtmHangingData, setGtmHangingData, gtmSubmissions, setGtmSubmissions, gtmNewStoreList, setGtmNewStoreList, gtmLargeGfxRounds, setGtmLargeGfxRounds, gtmLargeGfxDraft, setGtmLargeGfxDraft, gtmLargeGfxPhotos, setGtmLargeGfxPhotos, gtmLargeGfxCompareOverrides, setGtmLargeGfxCompareOverrides, storeList, setStoreList, updatedDates, setUpdatedDates, preEditSnap, setPreEditSnap, lastSKNConfirmed, lastRevisionData, setLastRevisionData, shippingTable1, setShippingTable1, shippingStep, setShippingStep, shippingCustomCols, setShippingCustomCols, shippingNextColId, setShippingNextColId }) {
+function Dashboard({ user, onLogout, theme, onToggleTheme, confirmed, setConfirmed, tempSelected, setTempSelected, onSKConfirm, sknConfirmedSnap, mailRecipients, setMailRecipients, sknRecipients, setSknRecipients, showMailPopup, setShowMailPopup, shippingGroups, setShippingGroups, hqItems, setHqItems, gtmWideColorData, setGtmWideColorData, gtmHangingData, setGtmHangingData, gtmSubmissions, setGtmSubmissions, gtmNewStoreList, setGtmNewStoreList, gtmLargeGfxRounds, setGtmLargeGfxRounds, gtmLargeGfxDraft, setGtmLargeGfxDraft, gtmLargeGfxPhotos, setGtmLargeGfxPhotos, gtmLargeGfxCompareOverrides, setGtmLargeGfxCompareOverrides, storeList, setStoreList, updatedDates, setUpdatedDates, preEditSnap, setPreEditSnap, lastSKNConfirmed, lastRevisionData, setLastRevisionData, shippingTable1, setShippingTable1, shippingStep, setShippingStep, shippingCustomCols, setShippingCustomCols, shippingNextColId, setShippingNextColId }) {
   const [menu, setMenu] = useState("schedule");
   const role = user.role;
   const cfg  = ROLE_CONFIG[role];
@@ -1026,7 +958,6 @@ function Dashboard({ user, onLogout, theme, onToggleTheme, confirmed, setConfirm
           : menu === "hq"
           ? <HQItemsPage
               hqItems={hqItems} setHqItems={setHqItems}
-              saveHqItemsNow={saveHqItemsNow}
               shippingGroups={shippingGroups}
               shippingCustomCols={shippingCustomCols}
               confirmed={confirmed}
@@ -1562,12 +1493,12 @@ function SchedulePage({ role, confirmed, setConfirmed, tempSelected, setTempSele
                       else handleDayClick(cell.day);
                     }}
                   >
-                    {isToday && <div style={styles.todayUnderline} />}
-                    {circleColor && !isReleased && (
+                    {isToday && <div style={styles.todayRing} />}
+                    {circleColor && (
                       <div style={{
                         ...styles.circle,
                         background: circleColor,
-                        border: "none",
+                        border: isReleased ? "2px dashed #aaa" : "none",
                       }} />
                     )}
                     <span style={{
@@ -2758,56 +2689,10 @@ function SettingsPage({ mailRecipients, setMailRecipients, sknRecipients, setSkn
 // ─── 배송 수량 설정 섹션 ─────────────────────────────────────────────────
 const MULTIPLIERS = [2, 3];
 
-// 본부 → 물류센터 매핑 (표2 커스텀 열의 "입고 수량으로 조정하기" 기능에서 사용)
-const LOGISTICS_GROUPS = [
-  { key:"이천", label:"이천물류",     본부s:["수도권","제주"] },
-  { key:"부산", label:"부산물류",     본부s:["부산"] },
-  { key:"대구", label:"대구물류",     본부s:["대구"] },
-  { key:"광주", label:"광주물류",     본부s:["서부"] },
-  { key:"중부", label:"중부물류(대전)", 본부s:["중부"] },
-];
-
 function ShippingGroupsSection({ shippingGroups, setShippingGroups, table1, setTable1, step, setStep, customCols, setCustomCols, nextColId, setNextColId, setStoreList }) {
   const storeFileRef = useRef(null);
   const [uploadStatus, setUploadStatus] = useState(null);
-  const [logisticsPopup, setLogisticsPopup] = useState(null); // {colId, inputs:{이천,부산,대구,광주,중부}}
-  const [totalQtyPopup, setTotalQtyPopup] = useState(null); // {colId, colLabel, total}
   // step, table1, customCols, nextColId는 App에서 props로 받음 (메뉴 전환 시 유지)
-
-  // 물류센터 그룹별 입고 수량(총량)을, 체크박스 활성화된 행들끼리의 기존 비중대로 재분배
-  const applyLogisticsAdjust = (colId, inputs) => {
-    setShippingGroups(prev => {
-      const next = prev.map(r => ({...r}));
-      LOGISTICS_GROUPS.forEach(grp => {
-        const total = Number(inputs[grp.key]) || 0;
-        const activeRows = next.filter(r => grp.본부s.includes(r.본부) && r[`c${colId}`] !== false);
-        if (activeRows.length === 0) return;
-        const curSum = activeRows.reduce((s,r)=>s+(r[`c${colId}Val`]||0),0);
-        activeRows.forEach(r => {
-          r[`c${colId}Val`] = curSum > 0
-            ? Math.round((r[`c${colId}Val`]||0) / curSum * total)
-            : Math.round(total / activeRows.length);
-        });
-      });
-      return next;
-    });
-  };
-
-  // 총 수량을 체크박스 활성화된 행들끼리의 기존 비중대로 재분배 (물류센터 구분 없이 전체)
-  const applyTotalQtyAdjust = (colId, total) => {
-    setShippingGroups(prev => {
-      const activeRows = prev.filter(r => r[`c${colId}`] !== false);
-      if (activeRows.length === 0) return prev;
-      const curSum = activeRows.reduce((s,r)=>s+(r[`c${colId}Val`]||0),0);
-      return prev.map(r => {
-        if (r[`c${colId}`] === false) return r;
-        const newVal = curSum > 0
-          ? Math.round((r[`c${colId}Val`]||0) / curSum * total)
-          : Math.round(total / activeRows.length);
-        return {...r, [`c${colId}Val`]: newVal};
-      });
-    });
-  };
 
   // 시도명 → 지역본부 매핑
   const sidoToRegion = (sido) => {
@@ -2931,32 +2816,26 @@ function ShippingGroupsSection({ shippingGroups, setShippingGroups, table1, setT
 
       return prev.map(row => {
         const t1row = table1.find(r => r.구분===row.구분 && r.본부===row.본부);
-        let next = row;
         if (!t1row) {
           // 대형 행: 표1 지역본부-수도권의 대형유통 값 사용
           if (row.구분==="대형") {
             const dv = table1.find(r=>r.본부==="수도권"&&r.구분==="지역본부")?.대형유통 ?? 0;
-            next = {...row, 기본값: dv, g1:null, g2:null, g3:1, g4:1};
+            return {...row, 기본값: dv, g1:null, g2:null, g3:1, g4:1};
           }
           // 택배배송: 수기 입력 유지
-        } else if (row.구분==="지역본부" || row.구분==="PS&M") {
-          // 지역본부/PS&M: 102% 조정값 + 도매값
-          next = {...row, 기본값: t1row.adj102 ?? t1row.소매매장 ?? row.기본값,
+          return row;
+        }
+        // 지역본부/PS&M: 102% 조정값 + 도매값
+        if (row.구분==="지역본부" || row.구분==="PS&M") {
+          return {...row, 기본값: t1row.adj102 ?? t1row.소매매장 ?? row.기본값,
                          도매값: t1row.도매 ?? 0};
-        } else if (row.구분==="Biz") {
-          // Biz: 표1 지역본부 행의 biz 수기 입력값 (같은 본부)
+        }
+        // Biz: 표1 지역본부 행의 biz 수기 입력값 (같은 본부)
+        if (row.구분==="Biz") {
           const bizT1 = table1.find(r => r.본부===row.본부 && r.구분==="지역본부");
-          next = {...row, 기본값: bizT1?.biz ?? 0};
+          return {...row, 기본값: bizT1?.biz ?? 0};
         }
-        // 잠금 해제(🔓)된 커스텀 열은 새 기본값×배수로 자동 재계산.
-        // 잠긴(🔒) 열은 손대지 않아 표1 변경의 영향을 받지 않는다.
-        for (const col of customCols) {
-          if (col.locked === false) {
-            next = next===row ? {...row} : next;
-            next[`c${col.id}Val`] = Math.round((next.기본값||0) * (col.mult||1));
-          }
-        }
-        return next;
+        return row;
       });
     });
     setStep("table2");
@@ -3077,8 +2956,8 @@ function ShippingGroupsSection({ shippingGroups, setShippingGroups, table1, setT
                               <div style={{display:"flex",alignItems:"center",gap:4,justifyContent:"center"}}>
                                 <span style={{color:"#aaa",fontSize:11}}>={row.소매매장}×102%→</span>
                                 <input type="number" min="0" style={{...numInput,width:60,color:"#1d6fa4",fontWeight:700}}
-                                  value={row.adj102 ?? ""}
-                                  onChange={e=>updateT1(row.id,"adj102", e.target.value==="" ? 0 : parseInt(e.target.value)||0)} />
+                                  value={row.adj102||""}
+                                  onChange={e=>updateT1(row.id,"adj102",parseInt(e.target.value)||0)} />
                               </div>
                             ) : <span style={{color:"#ccc"}}>-</span>}
                           </td>
@@ -3090,8 +2969,8 @@ function ShippingGroupsSection({ shippingGroups, setShippingGroups, table1, setT
                             {row.biz===null
                               ? <span style={{color:"#aaa",fontSize:11}}>비활성화</span>
                               : <input type="number" min="0" style={numInput}
-                                  value={row.biz ?? ""} placeholder="0"
-                                  onChange={e=>updateT1(row.id,"biz", e.target.value==="" ? 0 : parseInt(e.target.value)||0)} />
+                                  value={row.biz||""} placeholder="0"
+                                  onChange={e=>updateT1(row.id,"biz",parseInt(e.target.value)||0)} />
                             }
                           </td>
                           {/* 대형유통: 지역본부-수도권만 활성 */}
@@ -3099,15 +2978,15 @@ function ShippingGroupsSection({ shippingGroups, setShippingGroups, table1, setT
                             {row.대형유통===null
                               ? <span style={{color:"#aaa",fontSize:11}}>비활성화</span>
                               : <input type="number" min="0" style={numInput}
-                                  value={row.대형유통 ?? ""} placeholder="0"
-                                  onChange={e=>updateT1(row.id,"대형유통", e.target.value==="" ? 0 : parseInt(e.target.value)||0)} />
+                                  value={row.대형유통||""} placeholder="0"
+                                  onChange={e=>updateT1(row.id,"대형유통",parseInt(e.target.value)||0)} />
                             }
                           </td>
                           {/* 도매 */}
                           <td style={{...tD,textAlign:"center"}}>
                             <input type="number" min="0" style={numInput}
-                              value={row.도매 ?? ""} placeholder="0"
-                              onChange={e=>updateT1(row.id,"도매", e.target.value==="" ? 0 : parseInt(e.target.value)||0)} />
+                              value={row.도매||""} placeholder="0"
+                              onChange={e=>updateT1(row.id,"도매",parseInt(e.target.value)||0)} />
                           </td>
                         </tr>
                       ));
@@ -3149,16 +3028,10 @@ function ShippingGroupsSection({ shippingGroups, setShippingGroups, table1, setT
           <div style={{display:"flex", gap:10, justifyContent:"flex-end", marginBottom:12, flexWrap:"wrap"}}>
             <button style={{...settingsBtn("#1d6fa4"), padding:"7px 18px", fontSize:12}}
               onClick={()=>{
-                // 현재 남아있는 열들의 이름을 기준으로 비어있는 가장 작은 번호를 붙인다
-                // (예: 커스텀1을 지웠다가 다시 만들면 커스텀1부터 다시 채워짐)
-                const usedLabels = new Set(customCols.map(c=>c.label));
-                let n = 1;
-                while (usedLabels.has(`커스텀${n}`)) n++;
-                const label = `커스텀${n}`;
-                const newId = nextColId;
-                setCustomCols(prev=>[...prev,{id:newId,label,mult:1,locked:true}]);
+                const label=`커스텀${nextColId}`;
+                setCustomCols(prev=>[...prev,{id:nextColId,label,mult:1}]);
                 setNextColId(n=>n+1);
-                setShippingGroups(prev=>prev.map(r=>({...r,[`c${newId}`]:true,[`c${newId}Val`]:Math.round((r.기본값||0)*1)})));
+                setShippingGroups(prev=>prev.map(r=>({...r,[`c${nextColId}`]:true})));
               }}>+ 열 추가 커스텀</button>
             {customCols.length > 0 && (
               <button style={{...settingsBtn("#e85d26"), padding:"7px 18px", fontSize:12}}
@@ -3198,19 +3071,6 @@ function ShippingGroupsSection({ shippingGroups, setShippingGroups, table1, setT
                   {/* 커스텀 열: X1 X2 X3 일괄 버튼 */}
                   {customCols.map(col=>(
                     <th key={col.id} style={tH}>
-                      <button
-                        title={col.locked!==false
-                          ? "잠김: 표1에서 \"기본값으로 컨펌하기\"를 다시 눌러도 이 열의 수량은 그대로 유지됩니다 (직접 수정은 언제든 가능). 클릭하면 잠금 해제"
-                          : "해제됨: 표1에서 다시 컨펌하면 기본값×배수로 자동 재계산됩니다 (그 전까지는 직접 수정 가능). 클릭하면 다시 잠금"}
-                        style={{border:"none",background:"transparent",cursor:"pointer",marginRight:3,fontSize:13,padding:0}}
-                        onClick={()=>{
-                          const willLock = col.locked===false; // 현재 해제 상태면 → 잠그는 전환
-                          setCustomCols(prev=>prev.map(c=>c.id===col.id?{...c,locked:willLock}:c));
-                          if (willLock) {
-                            // 잠그는 순간의 계산값을 스냅샷으로 저장해서 그 이후로는 표1과 무관하게 유지
-                            setShippingGroups(prev=>prev.map(r=>({...r,[`c${col.id}Val`]:Math.round((r.기본값||0)*(col.mult||1))})));
-                          }
-                        }}>{col.locked!==false ? "🔒" : "🔓"}</button>
                       <input style={{width:64,border:"1px solid #ddd",borderRadius:6,
                         padding:"2px 4px",fontSize:11,textAlign:"center"}}
                         value={col.label}
@@ -3219,35 +3079,13 @@ function ShippingGroupsSection({ shippingGroups, setShippingGroups, table1, setT
                         onClick={()=>setCustomCols(prev=>prev.filter(c=>c.id!==col.id))}>×</button>
                       <div style={{display:"flex",gap:2,justifyContent:"center",marginTop:4}}>
                         {[1,2,3].map(m=>(
-                          <button key={m} title="현재 기본값 기준으로 전체 행에 일괄 적용" style={{
+                          <button key={m} style={{
                             background:col.mult===m?"#1d6fa4":"#e8eef5",
                             color:col.mult===m?"#fff":"#333",
                             border:"none",borderRadius:10,padding:"2px 7px",fontSize:10,fontWeight:700,cursor:"pointer"}}
-                            onClick={()=>{
-                              setCustomCols(prev=>prev.map(c=>c.id===col.id?{...c,mult:m}:c));
-                              setShippingGroups(prev=>prev.map(r=>({...r,[`c${col.id}Val`]:Math.round((r.기본값||0)*m)})));
-                            }}>×{m}</button>
+                            onClick={()=>setCustomCols(prev=>prev.map(c=>c.id===col.id?{...c,mult:m}:c))}>×{m}</button>
                         ))}
                       </div>
-                      <button title="물류센터별 입고 수량을 입력하면, 활성화(체크)된 행들끼리의 기존 비중대로 나눠 반영합니다"
-                        style={{...settingsBtn("#2e8b57"),marginTop:4,padding:"2px 6px",fontSize:10,width:"100%"}}
-                        onClick={()=>{
-                          const init = {};
-                          LOGISTICS_GROUPS.forEach(g=>{
-                            init[g.key] = shippingGroups
-                              .filter(r=>g.본부s.includes(r.본부) && r[`c${col.id}`]!==false)
-                              .reduce((s,r)=>s+(r[`c${col.id}Val`]||0),0);
-                          });
-                          setLogisticsPopup({colId:col.id, colLabel:col.label, inputs:init});
-                        }}>📦 입고수량 조정</button>
-                      <button title="전체 수량을 입력하면, 활성화(체크)된 행들끼리의 기존 비중대로 나눠 반영합니다"
-                        style={{...settingsBtn("#1d6fa4"),marginTop:4,padding:"2px 6px",fontSize:10,width:"100%"}}
-                        onClick={()=>{
-                          const curTotal = shippingGroups
-                            .filter(r=>r[`c${col.id}`]!==false)
-                            .reduce((s,r)=>s+(r[`c${col.id}Val`]||0),0);
-                          setTotalQtyPopup({colId:col.id, colLabel:col.label, total:curTotal});
-                        }}>📦 총 수량으로 조정</button>
                     </th>
                   ))}
                 </tr>
@@ -3270,7 +3108,7 @@ function ShippingGroupsSection({ shippingGroups, setShippingGroups, table1, setT
                   </td>
                   {customCols.map(col=>(
                     <td key={col.id} style={{...tD,textAlign:"center",color:"#1d6fa4"}}>
-                      {shippingGroups.filter(r=>r.active&&r[`c${col.id}`]!==false).reduce((s,r)=>s+(r[`c${col.id}Val`]||0),0)}
+                      {shippingGroups.filter(r=>r.active&&r[`c${col.id}`]!==false).reduce((s,r)=>s+Math.round((r.기본값||0)*(col.mult||1)),0)}
                     </td>
                   ))}
                 </tr>
@@ -3294,8 +3132,8 @@ function ShippingGroupsSection({ shippingGroups, setShippingGroups, table1, setT
                       <td style={{...tD,textAlign:"center"}}>
                         {row.구분==="택배배송"
                           ? <input type="number" min="0" style={{...numInput,width:60}}
-                              value={row.기본값 ?? ""} placeholder="0"
-                              onChange={e=>setShippingGroups(prev=>prev.map(r=>r.id===row.id?{...r,기본값:e.target.value===""?0:parseInt(e.target.value)||0}:r))} />
+                              value={row.기본값||""} placeholder="0"
+                              onChange={e=>setShippingGroups(prev=>prev.map(r=>r.id===row.id?{...r,기본값:parseInt(e.target.value)||0}:r))} />
                           : <><span style={{fontWeight:700,color:"#1d6fa4",fontSize:13}}>{row.기본값||0}</span>
                             <div style={{fontSize:10,color:"#aaa"}}>102% 조정값</div></>
                         }
@@ -3333,19 +3171,14 @@ function ShippingGroupsSection({ shippingGroups, setShippingGroups, table1, setT
                             </div>
                         }
                       </td>
-                      {/* 커스텀 열: 잠금 상태와 무관하게 항상 수량 직접 입력 가능.
-                          🔒 잠김 = 표1을 다시 컨펌해도 이 값 유지. 🔓 해제 = 표1 재컨펌 시 기본값×배수로 자동 재계산(그 전까지는 자유 수정 가능). */}
+                      {/* 커스텀 열: 체크박스 + 배수 */}
                       {customCols.map(col=>(
                         <td key={col.id} style={{...tD,textAlign:"center"}}>
                           <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
-                            <input type="number" min="0" style={{...numInput,width:56,
-                              color:row[`c${col.id}`]===false?"#ccc":"#1d6fa4",fontWeight:700,
-                              textDecoration:row[`c${col.id}`]===false?"line-through":"none"}}
-                              value={row[`c${col.id}Val`] ?? 0}
-                              onChange={e=>{
-                                const v = parseInt(e.target.value)||0;
-                                setShippingGroups(prev=>prev.map(r=>r.id===row.id?{...r,[`c${col.id}Val`]:v}:r));
-                              }} />
+                            <span style={{fontWeight:700,color:row[`c${col.id}`]===false?"#ccc":"#1d6fa4",fontSize:13,
+                              textDecoration:row[`c${col.id}`]===false?"line-through":"none"}}>
+                              {Math.round((row.기본값||0)*(col.mult||1))}
+                            </span>
                             <input type="checkbox" checked={row[`c${col.id}`]!==false} style={{width:16,height:16,accentColor:"#2e8b57",cursor:"pointer"}}
                               onChange={e=>setShippingGroups(prev=>prev.map(r=>r.id===row.id?{...r,[`c${col.id}`]:e.target.checked}:r))} />
                           </div>
@@ -3358,68 +3191,6 @@ function ShippingGroupsSection({ shippingGroups, setShippingGroups, table1, setT
             </table>
           </div>
         </>
-      )}
-
-      {/* 입고 수량으로 조정하기 팝업 */}
-      {logisticsPopup && (
-        <div style={styles2.popupOverlay}>
-          <div style={{...styles2.popupBox, minWidth:340, gap:14, alignItems:"stretch"}}>
-            <div style={{fontSize:16, fontWeight:800}}>📦 입고 수량으로 조정 — {logisticsPopup.colLabel}</div>
-            <div style={{fontSize:11.5, color:"#888"}}>
-              물류센터별 입고 수량을 입력하면, 해당 물류센터로 가는 본부들 중 체크박스가 활성화된 행들끼리
-              현재 수량의 비중대로 나눠서 반영됩니다.
-            </div>
-            {LOGISTICS_GROUPS.map(g=>(
-              <div key={g.key} style={{display:"flex", alignItems:"center", justifyContent:"space-between", gap:10}}>
-                <label style={{fontSize:13, fontWeight:600, color:"#333"}}>{g.label}</label>
-                <input type="number" min="0" style={{...numInput, width:100}}
-                  value={logisticsPopup.inputs[g.key] ?? ""}
-                  onChange={e=>{
-                    // 입력 중에는 원본 문자열을 그대로 보관 (즉시 숫자로 강제 변환하면
-                    // 지웠을 때 0이 남아있다가 뒤에 이어 쓰는 값과 붙어버리는 문제가 생김)
-                    const raw = e.target.value;
-                    setLogisticsPopup(prev=>({...prev, inputs:{...prev.inputs, [g.key]: raw===""?"":raw}}));
-                  }} />
-              </div>
-            ))}
-            <div style={{display:"flex", gap:10, marginTop:4}}>
-              <button style={{...styles2.popupBtn, background:"#aaa", color:"#333", flex:1}}
-                onClick={()=>setLogisticsPopup(null)}>취소</button>
-              <button style={{...styles2.popupBtn, flex:1}}
-                onClick={()=>{
-                  applyLogisticsAdjust(logisticsPopup.colId, logisticsPopup.inputs);
-                  setLogisticsPopup(null);
-                }}>적용</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 총 수량으로 조정 팝업 */}
-      {totalQtyPopup && (
-        <div style={styles2.popupOverlay}>
-          <div style={{...styles2.popupBox, minWidth:320, gap:14, alignItems:"stretch"}}>
-            <div style={{fontSize:16, fontWeight:800}}>📦 총 수량으로 조정 — {totalQtyPopup.colLabel}</div>
-            <div style={{fontSize:11.5, color:"#888"}}>
-              입력한 총 수량을, 이 열에서 체크박스가 활성화된 행들끼리 현재 수량의 비중대로 나눠서 반영합니다.
-            </div>
-            <input type="number" min="0" style={{...numInput, width:"100%"}}
-              value={totalQtyPopup.total ?? ""}
-              onChange={e=>{
-                const raw = e.target.value;
-                setTotalQtyPopup(prev=>({...prev, total: raw===""?"":raw}));
-              }} />
-            <div style={{display:"flex", gap:10, marginTop:4}}>
-              <button style={{...styles2.popupBtn, background:"#aaa", color:"#333", flex:1}}
-                onClick={()=>setTotalQtyPopup(null)}>취소</button>
-              <button style={{...styles2.popupBtn, flex:1}}
-                onClick={()=>{
-                  applyTotalQtyAdjust(totalQtyPopup.colId, Number(totalQtyPopup.total)||0);
-                  setTotalQtyPopup(null);
-                }}>적용</button>
-            </div>
-          </div>
-        </div>
       )}
     </div>
   );
@@ -3543,7 +3314,7 @@ function SKNRecipientsSection({ sknRecipients, setSknRecipients }) {
 }
 
 // ─── 본사 배송 물품 페이지 ───────────────────────────────────────────────
-function HQItemsPage({ hqItems, setHqItems, saveHqItemsNow, shippingGroups, confirmed, role, shippingCustomCols, addNotification }) {
+function HQItemsPage({ hqItems, setHqItems, shippingGroups, confirmed, role, shippingCustomCols, addNotification }) {
   const isAdmin = role === "admin";
   const today = new Date();
   // 21일 이후면 다음달 기준 기간(당월21~익월20)으로 초기화
@@ -3580,14 +3351,8 @@ function HQItemsPage({ hqItems, setHqItems, saveHqItemsNow, shippingGroups, conf
   // hqItems 중 assignedDate가 현재 deliveryDates에 없는 것들
   const confirmedKeys = new Set(deliveryDates.map(([k])=>k));
 
-  // 현재 activeTab이 없으면 오늘 이후(오늘 포함) 가장 가까운 배송일로 초기화.
-  // 남은 배송일이 없으면(모두 지난 경우) 가장 최근 배송일로 대체.
-  const todayKey = (() => {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
-  })();
-  const upcomingTab = deliveryDates.find(([k]) => k >= todayKey)?.[0];
-  const effectiveTab = activeTab || upcomingTab || deliveryDates[deliveryDates.length-1]?.[0] || "pending";
+  // 현재 activeTab이 없으면 첫 번째 배송일로 초기화
+  const effectiveTab = activeTab || (deliveryDates[0]?.[0] ?? "pending");
 
   const fmtDate = (k) => {
     if (!k) return "-";
@@ -3655,18 +3420,10 @@ function HQItemsPage({ hqItems, setHqItems, saveHqItemsNow, shippingGroups, conf
     const REGIONS = ['수도권','제주','부산','대구','서부','중부'];
     const GROUP_KEY_MAP = { "그룹1(소매Only)":"g1","그룹2(소매+Biz)":"g2","그룹3(소매+Biz+대형)":"g3","그룹3+도매":"g_dm","그룹4":"g4" };
     const gKey = GROUP_KEY_MAP[item.qtyGroup];
-    // qtyGroup이 커스텀 열 이름일 수도 있음 — 이 경우 기본값×배수가 아니라
-    // 행마다 저장된 실제 수량(c{id}Val)을 그대로 써야 함
-    const customCol = shippingCustomCols.find(c => c.label === item.qtyGroup);
     const active = shippingGroups.filter(r => r.active);
     const fmtD = (k) => { if(!k) return ""; const[,m,d]=k.split("-"); return `${parseInt(m)}월 ${parseInt(d)}일`; };
     const calcV = (row,gk) => { if(!gk||row[gk]===null) return null; return Math.round((row.기본값||0)*(typeof row[gk]==="number"?row[gk]:1)); };
-    const getVal = (구분,본부) => {
-      const row = active.find(r=>r.구분===구분&&r.본부===본부);
-      if (!row) return null;
-      if (customCol) return row[`c${customCol.id}`]===false ? null : (row[`c${customCol.id}Val`] ?? 0);
-      return calcV(row,gKey);
-    };
+    const getVal = (구분,본부) => { const row=active.find(r=>r.구분===구분&&r.본부===본부); return row?calcV(row,gKey):null; };
 
     const jb  = REGIONS.map(r => getVal("지역본부",r) ?? 0);
     const psm = REGIONS.map(r => getVal("PS&M",r) ?? 0);
@@ -4026,13 +3783,7 @@ function HQItemsPage({ hqItems, setHqItems, saveHqItemsNow, shippingGroups, conf
           itemName={sianPopup.itemName}
           images={sianPopup.images}
           isAdmin={isAdmin}
-          onSave={async (imgs)=>{
-            const newItems = hqItems.map(it=>it.id===sianPopup.itemId?{...it,sianImages:imgs}:it);
-            const ok = await saveHqItemsNow(newItems);
-            if (ok) setSianPopup(null);
-            // 실패 시 팝업을 닫지 않고 그대로 둬서 사용자가 다시 저장을 시도할 수 있게 함
-            // (saveHqItemsNow 내부에서 이미 실패 알림을 띄움)
-          }}
+          onSave={(imgs)=>{ updateItem(sianPopup.itemId,"sianImages",imgs); setSianPopup(null); }}
           onClose={()=>setSianPopup(null)}
         />
       )}
@@ -4061,7 +3812,7 @@ function HQItemsPage({ hqItems, setHqItems, saveHqItemsNow, shippingGroups, conf
           ...shippingCustomCols.map(col=>({
             label: col.label,
             key: `c${col.id}`,
-            total: activeRows.filter(r=>r[`c${col.id}`]!==false).reduce((s,r)=>s+(r[`c${col.id}Val`]||0),0),
+            total: activeRows.filter(r=>r[`c${col.id}`]!==false).reduce((s,r)=>s+Math.round((r.기본값||0)*(col.mult||1)),0),
           })),
         ].filter(g=>g.total>0);
         return (
@@ -5747,18 +5498,6 @@ function SianPopup({ itemId, itemName, images, isAdmin, onSave, onClose }) {
   const [localImgs, setLocalImgs] = useState(images||[]);
   const fileRef = useRef(null);
   const [viewImg, setViewImg] = useState(null);
-  const [saving, setSaving] = useState(false);
-  // 저장이 실제로 끝나기 전에 팝업을 닫아버리면, 사용자가 곧바로 새로고침하거나
-  // 다른 화면으로 이동했을 때 저장 요청이 완료되지 못하고 유실될 수 있다.
-  // 그래서 onSave의 완료를 기다렸다가 닫는다 (호출부에서 실패 시 팝업을 안 닫으면 재시도 가능).
-  const handleSaveClick = async () => {
-    setSaving(true);
-    try {
-      await onSave(localImgs);
-    } finally {
-      setSaving(false);
-    }
-  };
   const handleUpload = e => {
     Array.from(e.target.files).forEach(file=>{
       const reader=new FileReader();
@@ -5766,14 +5505,6 @@ function SianPopup({ itemId, itemName, images, isAdmin, onSave, onClose }) {
       reader.readAsDataURL(file);
     });
     e.target.value="";
-  };
-  const handleDownload = img => {
-    const a = document.createElement("a");
-    a.href = img.dataUrl;
-    a.download = img.name || "시안.png";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
   };
   return (
     <div style={styles2.popupOverlay}>
@@ -5793,9 +5524,6 @@ function SianPopup({ itemId, itemName, images, isAdmin, onSave, onClose }) {
                   <img src={img.dataUrl} alt={img.name} style={{width:"100%",height:120,objectFit:"cover"}}/>
                   <div style={{fontSize:11,color:"#666",padding:"4px 6px",background:"#f8f8f8",
                     overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{img.name}</div>
-                  <button title="다운로드" style={{position:"absolute",top:4,right:isAdmin?28:4,background:"rgba(0,0,0,0.5)",
-                    color:"#fff",border:"none",borderRadius:"50%",width:20,height:20,fontSize:11,cursor:"pointer"}}
-                    onClick={e=>{e.stopPropagation();handleDownload(img);}}>⬇</button>
                   {isAdmin && (
                     <button style={{position:"absolute",top:4,right:4,background:"rgba(0,0,0,0.5)",
                       color:"#fff",border:"none",borderRadius:"50%",width:20,height:20,fontSize:12,cursor:"pointer"}}
@@ -5806,24 +5534,16 @@ function SianPopup({ itemId, itemName, images, isAdmin, onSave, onClose }) {
             </div>
         }
         <div style={{display:"flex",gap:10,width:"100%"}}>
-          <button style={{...styles2.popupBtn,background:"#aaa",color:"#333",flex:1}} onClick={onClose} disabled={saving}>취소</button>
+          <button style={{...styles2.popupBtn,background:"#aaa",color:"#333",flex:1}} onClick={onClose}>취소</button>
           {isAdmin
-            ? <button style={{...styles2.popupBtn,flex:1,opacity:saving?0.6:1}} onClick={handleSaveClick} disabled={saving}>
-                {saving ? "저장 중…" : "저장"}
-              </button>
+            ? <button style={{...styles2.popupBtn,flex:1}} onClick={()=>onSave(localImgs)}>저장</button>
             : <button style={{...styles2.popupBtn,flex:1}} onClick={onClose}>닫기</button>}
         </div>
-        {viewImg && createPortal(
+        {viewImg && (
           <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:10000,
             display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>setViewImg(null)}>
-            <div style={{position:"relative"}} onClick={e=>e.stopPropagation()}>
-              <img src={viewImg.dataUrl} alt={viewImg.name} style={{maxWidth:"90vw",maxHeight:"90vh",borderRadius:8,objectFit:"contain",display:"block"}}/>
-              <button title="다운로드" style={{position:"absolute",top:10,right:10,background:"rgba(0,0,0,0.6)",
-                color:"#fff",border:"none",borderRadius:8,padding:"6px 12px",fontSize:13,cursor:"pointer"}}
-                onClick={()=>handleDownload(viewImg)}>⬇ 다운로드</button>
-            </div>
-          </div>,
-          document.body
+            <img src={viewImg.dataUrl} alt={viewImg.name} style={{maxWidth:"90vw",maxHeight:"90vh",borderRadius:8,objectFit:"contain"}}/>
+          </div>
         )}
       </div>
     </div>
@@ -5998,12 +5718,10 @@ const styles = {
     position:"absolute", width:34, height:34, borderRadius:"50%",
     top:"50%", left:"50%", transform:"translate(-50%,-50%)", zIndex:1,
   },
-  // "오늘" 표시는 원/링 형태로 만들면 확정(빨간 원)·선택 중(파란 원)·해제 표시와 계속 헷갈리므로
-  // 원이 아닌 아래쪽 작은 밑줄로만 표시한다.
-  todayUnderline: {
-    position:"absolute", width:16, height:3, borderRadius:2,
-    background:"#94a3b8", left:"50%", bottom:4,
-    transform:"translateX(-50%)", zIndex:0,
+  todayRing: {
+    position:"absolute", width:34, height:34, borderRadius:"50%",
+    border:`2px solid ${C.blue}`, top:"50%", left:"50%",
+    transform:"translate(-50%,-50%)", zIndex:0,
   },
   dayNum: { fontSize:13, position:"relative", zIndex:2, fontWeight:500 },
   holDot: { fontSize:7, position:"absolute", bottom:3, right:3, opacity:0.7 },
