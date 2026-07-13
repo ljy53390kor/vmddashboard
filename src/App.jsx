@@ -4387,7 +4387,7 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
   const [activeSection, setActiveSection] = useState("list"); // "list" | "missing"
   const [hqFilter, setHqFilter] = useState("전체");
   const [showAddStore, setShowAddStore] = useState(false);
-  const [addStoreForm, setAddStoreForm] = useState({ 구분:"", 본부:"", 대리점코드:"", 대리점명:"", 매장코드:"", 매장명:"", 주소:"", 단면양면:"", 슬롯:"", 이전수량:"" });
+  const [addStoreForm, setAddStoreForm] = useState({ 구분:"", 본부:"", 대리점코드:"", 대리점명:"", 매장코드:"", 매장명:"", 주소:"", 단면양면:"", 슬롯:"", 신청수량:"" });
   const isStore = variant === "store";
 
   // 예전에 업로드되어 id 필드가 없는 신설 매장 리스트(레거시 데이터)를 한 번만 채워준다.
@@ -4623,7 +4623,7 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
         대리점코드: fields.대리점코드||"", 대리점명: fields.대리점명||"",
         매장코드: fields.매장코드||"", 매장명: fields.매장명||"", 주소: fields.주소||"",
         단면양면: fields.단면양면||"", 슬롯: fields.슬롯||"",
-        이전수량: fields.이전수량 ?? 0, 신규수량: "",
+        이전수량: 0, 신규수량: fields.신청수량 ?? "",
       }];
     });
   };
@@ -4867,7 +4867,7 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
                 )}
                 {isStore && activeSection === "list" && (
                   <button onClick={()=>{
-                    setAddStoreForm({ 구분:"", 본부: hqFilter!=="전체" ? hqFilter : "", 대리점코드:"", 대리점명:"", 매장코드:"", 매장명:"", 단면양면:"", 슬롯:"", 이전수량:"" });
+                    setAddStoreForm({ 구분:"", 본부: hqFilter!=="전체" ? hqFilter : "", 대리점코드:"", 대리점명:"", 매장코드:"", 매장명:"", 주소:"", 단면양면:"", 슬롯:"", 신청수량:"" });
                     setShowAddStore(true);
                   }}
                     style={{...settingsBtn("#1d6fa4"), padding:"7px 14px", fontSize:12}}>+ 매장 추가</button>
@@ -5087,12 +5087,12 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
             <div style={{fontSize:16, fontWeight:800, marginBottom:4}}>+ 매장 추가</div>
             {[
               ["본부","본부"], ["대리점코드","대리점코드"], ["대리점명","대리점명"],
-              ["매장코드","매장코드"], ["매장명","매장명"], ["주소","주소"], ["단면양면","단면/양면"], ["슬롯","도광판슬롯"], ["이전수량","이전 수량"],
+              ["매장코드","매장코드"], ["매장명","매장명"], ["주소","주소"], ["단면양면","단면/양면"], ["슬롯","도광판슬롯"], ["신청수량","신청 수량"],
             ].map(([field,label])=>(
               <div key={field} style={{display:"flex", flexDirection:"column", gap:4}}>
                 <label style={{fontSize:11.5, color:"#888", fontWeight:600}}>{label}</label>
                 <input
-                  type={field==="이전수량"?"number":"text"}
+                  type={field==="신청수량"?"number":"text"}
                   value={addStoreForm[field]}
                   onChange={e=>setAddStoreForm(prev=>({...prev,[field]:e.target.value}))}
                   style={{...numInput, width:"100%", textAlign:"left"}}
