@@ -3451,10 +3451,18 @@ function HQItemsPage({ hqItems, setHqItems, shippingGroups, confirmed, role, shi
     const REGIONS = ['수도권','제주','부산','대구','서부','중부'];
     const GROUP_KEY_MAP = { "그룹1(소매Only)":"g1","그룹2(소매+Biz)":"g2","그룹3(소매+Biz+대형)":"g3","그룹3+도매":"g_dm","그룹4":"g4" };
     const gKey = GROUP_KEY_MAP[item.qtyGroup];
+    // qtyGroup이 커스텀 열 이름일 수도 있음 — 이 경우 기본값×배수가 아니라
+    // 행마다 저장된 실제 수량(c{id}Val)을 그대로 써야 함
+    const customCol = shippingCustomCols.find(c => c.label === item.qtyGroup);
     const active = shippingGroups.filter(r => r.active);
     const fmtD = (k) => { if(!k) return ""; const[,m,d]=k.split("-"); return `${parseInt(m)}월 ${parseInt(d)}일`; };
     const calcV = (row,gk) => { if(!gk||row[gk]===null) return null; return Math.round((row.기본값||0)*(typeof row[gk]==="number"?row[gk]:1)); };
-    const getVal = (구분,본부) => { const row=active.find(r=>r.구분===구분&&r.본부===본부); return row?calcV(row,gKey):null; };
+    const getVal = (구분,본부) => {
+      const row = active.find(r=>r.구분===구분&&r.본부===본부);
+      if (!row) return null;
+      if (customCol) return row[`c${customCol.id}`]===false ? null : Math.round((row.기본값||0)*(customCol.mult||1));
+      return calcV(row,gKey);
+    };
 
     const jb  = REGIONS.map(r => getVal("지역본부",r) ?? 0);
     const psm = REGIONS.map(r => getVal("PS&M",r) ?? 0);
