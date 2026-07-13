@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { createPortal } from "react-dom";
 import * as XLSX from "xlsx-js-style";
 import { dataClient } from "./lib/dataClient";
 import { isVmddashboard } from "./lib/target";
@@ -3351,8 +3352,10 @@ function HQItemsPage({ hqItems, setHqItems, shippingGroups, confirmed, role, shi
   // hqItems 중 assignedDate가 현재 deliveryDates에 없는 것들
   const confirmedKeys = new Set(deliveryDates.map(([k])=>k));
 
-  // 현재 activeTab이 없으면 첫 번째 배송일로 초기화
-  const effectiveTab = activeTab || (deliveryDates[0]?.[0] ?? "pending");
+  // 현재 activeTab이 없으면 오늘 기준 가장 가까운(지나지 않은) 배송일로 초기화, 없으면 첫 배송일
+  const todayKey = toKey(today.getFullYear(), today.getMonth(), today.getDate());
+  const effectiveTab = activeTab
+    || (deliveryDates.find(([k]) => k >= todayKey)?.[0] ?? deliveryDates[0]?.[0] ?? "pending");
 
   const fmtDate = (k) => {
     if (!k) return "-";
@@ -4063,7 +4066,7 @@ const GTM_TABS = [
 ];
 
 // 신설 매장 리스트의 "마케팅본부/마케팅팀" 값을 본부(수도권/부산/대구/서부/제주/중부)로 매핑
-const GTM_REGIONS = ["수도권","부산","대구","서부","제주","중부"];
+const GTM_REGIONS = ["수도권","부산","대구","서부","제주","중부","유통사업부"];
 // 와이드컬러 업로드 시 "어느 소속인가요?" 선택지 (제주 제외, 유통사업부 포함)
 const WIDECOLOR_UPLOAD_SCOPES = ["수도권","부산","대구","서부","중부","유통사업부"];
 const GTM_TEAM_TO_REGION = {
@@ -4077,9 +4080,11 @@ const GTM_TEAM_TO_REGION = {
 };
 function guessGtmRegion(mktgHQ, mktgTeam) {
   const hq = String(mktgHQ||"").trim();
+  if (hq.includes("유통사업부")) return "유통사업부";
   const direct = GTM_REGIONS.find(r => hq.startsWith(r));
   if (direct) return direct;
   const team = String(mktgTeam||"").trim();
+  if (team.includes("유통사업부")) return "유통사업부";
   if (GTM_TEAM_TO_REGION[team]) return GTM_TEAM_TO_REGION[team];
   // 부산/대구 계열을 먼저 체크 (중부산·경북 등이 다른 지역명을 부분 포함하는 것 방지)
   if (team.includes("부산") || team.includes("경남") || team.includes("울산")) return "부산";
@@ -4520,7 +4525,7 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
             <table style={{borderCollapse:"collapse", width:"100%", minWidth: isStore?680:480, fontSize:12.5}}>
               <thead>
                 <tr style={{background:"#f0f4f8"}}>
-                  <th style={tH}>유통사업부</th>
+                  <th style={tH}>지역담당</th>
                   <th style={tH}>{isStore ? "전체 목록 제출" : "제출여부"}</th>
                   <th style={tH}>{isStore ? "전체 목록 제출 일시" : "제출 일시"}</th>
                   {isStore && <th style={tH}>누락 매장 제출</th>}
@@ -5148,7 +5153,7 @@ function GTMLargeGfx({ rounds, setRounds, draft, setDraft, photos, setPhotos, co
             <table style={{borderCollapse:"collapse", width:"100%", minWidth:480, fontSize:12.5}}>
               <thead>
                 <tr style={{background:"#f0f4f8"}}>
-                  <th style={tH}>유통사업부</th>
+                  <th style={tH}>지역담당</th>
                   <th style={tH}>제출여부</th>
                   <th style={tH}>제출 일시</th>
                   <th style={{...tH, minWidth:220}}>제출 히스토리</th>
@@ -5506,6 +5511,14 @@ function SianPopup({ itemId, itemName, images, isAdmin, onSave, onClose }) {
     });
     e.target.value="";
   };
+  const downloadImg = (img) => {
+    const a = document.createElement("a");
+    a.href = img.dataUrl;
+    a.download = img.name || "시안.png";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
   return (
     <div style={styles2.popupOverlay}>
       <div style={{...styles2.popupBox,minWidth:420,maxWidth:560,gap:14,maxHeight:"85vh",overflowY:"auto"}}>
@@ -5524,6 +5537,11 @@ function SianPopup({ itemId, itemName, images, isAdmin, onSave, onClose }) {
                   <img src={img.dataUrl} alt={img.name} style={{width:"100%",height:120,objectFit:"cover"}}/>
                   <div style={{fontSize:11,color:"#666",padding:"4px 6px",background:"#f8f8f8",
                     overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{img.name}</div>
+                  <button style={{position:"absolute",top:4,right:isAdmin?28:4,background:"rgba(0,0,0,0.5)",
+                    color:"#fff",border:"none",borderRadius:"50%",width:20,height:20,fontSize:11,cursor:"pointer",
+                    display:"flex",alignItems:"center",justifyContent:"center"}}
+                    title="다운로드"
+                    onClick={e=>{e.stopPropagation();downloadImg(img);}}>⬇</button>
                   {isAdmin && (
                     <button style={{position:"absolute",top:4,right:4,background:"rgba(0,0,0,0.5)",
                       color:"#fff",border:"none",borderRadius:"50%",width:20,height:20,fontSize:12,cursor:"pointer"}}
@@ -5539,13 +5557,23 @@ function SianPopup({ itemId, itemName, images, isAdmin, onSave, onClose }) {
             ? <button style={{...styles2.popupBtn,flex:1}} onClick={()=>onSave(localImgs)}>저장</button>
             : <button style={{...styles2.popupBtn,flex:1}} onClick={onClose}>닫기</button>}
         </div>
-        {viewImg && (
-          <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:10000,
-            display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>setViewImg(null)}>
-            <img src={viewImg.dataUrl} alt={viewImg.name} style={{maxWidth:"90vw",maxHeight:"90vh",borderRadius:8,objectFit:"contain"}}/>
-          </div>
-        )}
       </div>
+      {viewImg && createPortal(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:10000,
+          display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>setViewImg(null)}>
+          <img src={viewImg.dataUrl} alt={viewImg.name}
+            style={{maxWidth:"90vw",maxHeight:"90vh",width:"auto",height:"auto",borderRadius:8,objectFit:"contain",display:"block"}}/>
+          <button style={{position:"absolute",top:24,right:76,background:"rgba(255,255,255,0.15)",
+            color:"#fff",border:"none",borderRadius:"50%",width:40,height:40,fontSize:18,cursor:"pointer"}}
+            title="다운로드"
+            onClick={e=>{e.stopPropagation();downloadImg(viewImg);}}>⬇</button>
+          <button style={{position:"absolute",top:24,right:24,background:"rgba(255,255,255,0.15)",
+            color:"#fff",border:"none",borderRadius:"50%",width:40,height:40,fontSize:18,cursor:"pointer"}}
+            title="닫기"
+            onClick={()=>setViewImg(null)}>×</button>
+        </div>,
+        document.body
+      )}
     </div>
   );
 }
