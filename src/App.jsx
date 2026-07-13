@@ -4383,6 +4383,7 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
   const [uploadStatus, setUploadStatus] = useState(null);
   const [uploadRegion, setUploadRegion] = useState("");
   const [reuploadStatus, setReuploadStatus] = useState(null);
+  const [reuploadPreview, setReuploadPreview] = useState(null); // {regionsInFile, updatesByCode, added, removed, changed}
   const [newStoreUploadStatus, setNewStoreUploadStatus] = useState(null);
   const [activeSection, setActiveSection] = useState("list"); // "list" | "missing"
   const [hqFilter, setHqFilter] = useState("전체");
@@ -4681,18 +4682,42 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
             return;
           }
         }
-        setData(prev => {
-          const kept = prev.filter(r => !regionsInFile.has(r.본부));
-          const newRows = [...updatesByCode.values()].map((fields,i) => ({ id: Date.now()+i, ...fields }));
-          return [...kept, ...newRows];
+        // 실제로 반영하기 전에, 이전 결과 대비 무엇이 바뀌는지(삭제/추가/수량변경) 미리보기로 보여주고 확인받는다.
+        const oldInRegion = data.filter(r => regionsInFile.has(r.본부));
+        const oldByCode = new Map(oldInRegion.map(r=>[r.매장코드, r]));
+        const added = [], changed = [];
+        updatesByCode.forEach((fields, code) => {
+          const old = oldByCode.get(code);
+          if (!old) {
+            added.push(fields);
+          } else {
+            const beforeQty = Number(old.신규수량)||0;
+            const afterQty = Number(fields.신규수량)||0;
+            if (beforeQty !== afterQty) {
+              changed.push({ 매장코드:code, 매장명:fields.매장명, before:beforeQty, after:afterQty });
+            }
+          }
         });
-        setReuploadStatus({type:"success", msg:`${[...regionsInFile].join(", ")} ${updatesByCode.size}개 매장으로 교체 완료`});
+        const removed = oldInRegion.filter(r => !updatesByCode.has(r.매장코드));
+        setReuploadPreview({ regionsInFile, updatesByCode, added, removed, changed, fileName:file.name });
       } catch(err) {
         setReuploadStatus({type:"error", msg:"오류: "+err.message});
       }
     };
     reader.readAsArrayBuffer(file);
     e.target.value="";
+  };
+
+  const confirmReupload = () => {
+    if (!reuploadPreview) return;
+    const { regionsInFile, updatesByCode } = reuploadPreview;
+    setData(prev => {
+      const kept = prev.filter(r => !regionsInFile.has(r.본부));
+      const newRows = [...updatesByCode.values()].map((fields,i) => ({ id: Date.now()+i, ...fields }));
+      return [...kept, ...newRows];
+    });
+    setReuploadStatus({type:"success", msg:`${[...regionsInFile].join(", ")} ${updatesByCode.size}개 매장으로 교체 완료`});
+    setReuploadPreview(null);
   };
 
   // 전체 목록 제출과 누락 매장 제출을 별개로 추적: submissions = { list: {...}, missing: {...} }
@@ -5108,6 +5133,83 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
                   addStoreRow(addStoreForm);
                   setShowAddStore(false);
                 }}>추가</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 취합 결과 재업로드 — 실제로 반영하기 전에 이전 결과 대비 변경 내역(삭제/추가/수량변경)을 확인 */}
+      {reuploadPreview && (
+        <div style={styles2.popupOverlay}>
+          <div style={{...styles2.popupBox, minWidth:480, maxWidth:640, maxHeight:"85vh", overflowY:"auto", alignItems:"stretch", gap:14}}>
+            <div style={{fontSize:16, fontWeight:800}}>📤 취합 결과 업로드 확인 — {reuploadPreview.fileName}</div>
+            <div style={{fontSize:12, color:"#888"}}>
+              {[...reuploadPreview.regionsInFile].join(", ")} 소속 데이터를 이 파일 내용으로 교체합니다. 아래 변경 내역을 확인하고 업로드해주세요.
+            </div>
+            {reuploadPreview.removed.length===0 && reuploadPreview.added.length===0 && reuploadPreview.changed.length===0 && (
+              <div style={{fontSize:13, color:"#888", textAlign:"center", padding:16}}>이전 결과와 달라진 점이 없습니다.</div>
+            )}
+            {reuploadPreview.removed.length>0 && (
+              <div>
+                <div style={{fontSize:13, fontWeight:700, color:"#c00", marginBottom:6}}>🗑 삭제된 매장 ({reuploadPreview.removed.length}개)</div>
+                <div style={{maxHeight:160, overflowY:"auto", border:"1px solid #ffdcdc", borderRadius:8}}>
+                  <table style={{borderCollapse:"collapse", width:"100%", fontSize:12}}>
+                    <tbody>
+                      {reuploadPreview.removed.map(r=>(
+                        <tr key={r.매장코드} style={{background:"#fff5f5"}}>
+                          <td style={{...tD, color:"#c00"}}>{r.매장코드}</td>
+                          <td style={tD}>{r.매장명}</td>
+                          <td style={{...tD, textAlign:"right", color:"#888"}}>{r.신규수량 || 0}개</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+            {reuploadPreview.added.length>0 && (
+              <div>
+                <div style={{fontSize:13, fontWeight:700, color:"#2e8b57", marginBottom:6}}>🆕 추가된 매장 ({reuploadPreview.added.length}개)</div>
+                <div style={{maxHeight:160, overflowY:"auto", border:"1px solid #d5f0e0", borderRadius:8}}>
+                  <table style={{borderCollapse:"collapse", width:"100%", fontSize:12}}>
+                    <tbody>
+                      {reuploadPreview.added.map(r=>(
+                        <tr key={r.매장코드} style={{background:"#f2fbf6"}}>
+                          <td style={{...tD, color:"#2e8b57"}}>{r.매장코드}</td>
+                          <td style={tD}>{r.매장명}</td>
+                          <td style={{...tD, textAlign:"right", fontWeight:700, color:"#2e8b57"}}>{r.신규수량 || 0}개</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+            {reuploadPreview.changed.length>0 && (
+              <div>
+                <div style={{fontSize:13, fontWeight:700, color:"#1d6fa4", marginBottom:6}}>✏️ 수량 변경된 매장 ({reuploadPreview.changed.length}개)</div>
+                <div style={{maxHeight:160, overflowY:"auto", border:"1px solid #d5e6f5", borderRadius:8}}>
+                  <table style={{borderCollapse:"collapse", width:"100%", fontSize:12}}>
+                    <tbody>
+                      {reuploadPreview.changed.map(r=>(
+                        <tr key={r.매장코드} style={{background:"#f2f8fd"}}>
+                          <td style={{...tD, color:"#1d6fa4"}}>{r.매장코드}</td>
+                          <td style={tD}>{r.매장명}</td>
+                          <td style={{...tD, textAlign:"right"}}>
+                            <span style={{color:"#888"}}>{r.before}개</span> → <span style={{fontWeight:700, color:"#1d6fa4"}}>{r.after}개</span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+            <div style={{display:"flex", gap:10, marginTop:4}}>
+              <button style={{...styles2.popupBtn, background:"#aaa", color:"#333", flex:1}}
+                onClick={()=>setReuploadPreview(null)}>취소</button>
+              <button style={{...styles2.popupBtn, flex:1}}
+                onClick={confirmReupload}>확인 후 업로드</button>
             </div>
           </div>
         </div>
