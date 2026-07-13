@@ -39,6 +39,27 @@ const supabaseMail = {
   sendEmail: ({ to, subject, html }) => supabase.functions.invoke('send-email', { body: { to, subject, html } }),
 };
 
+const SIAN_BUCKET = 'sian-images';
+
+const supabaseStorage = {
+  // 시안 이미지를 base64로 JSON에 박아넣지 않고 Storage 버킷에 파일로 올린 뒤 공개 URL만 반환한다.
+  uploadImage: async (file, folder = 'sian') => {
+    const ext = (file.name.split('.').pop() || 'png').toLowerCase();
+    const path = `${folder}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+    const { error } = await supabase.storage.from(SIAN_BUCKET).upload(path, file, {
+      cacheControl: '31536000',
+      contentType: file.type || undefined,
+    });
+    if (error) throw error;
+    const { data } = supabase.storage.from(SIAN_BUCKET).getPublicUrl(path);
+    return { url: data.publicUrl, path };
+  },
+  deleteImage: async (path) => {
+    if (!path) return;
+    await supabase.storage.from(SIAN_BUCKET).remove([path]);
+  },
+};
+
 // ═══════════════════════════════════════════════════════════════════════
 // Playground(vmddashboard) 경로 — vmddashboard-svc 백엔드(FastAPI + MariaDB) 사용.
 // ═══════════════════════════════════════════════════════════════════════
@@ -177,6 +198,13 @@ const playgroundNotifications = {
   },
 };
 
+// Playground(vmddashboard-svc) 백엔드는 아직 파일/오브젝트 스토리지 엔드포인트가 없다.
+// uploadImage가 null을 반환하면 호출부(SianPopup)가 기존 base64 dataURL 저장 방식으로 폴백한다.
+const playgroundStorage = {
+  uploadImage: async () => null,
+  deleteImage: async () => {},
+};
+
 const playgroundMail = {
   sendEmail: async ({ to, subject, html }) => {
     const { res, body } = await apiFetch('/send-email', {
@@ -195,4 +223,5 @@ export const dataClient = {
   appData: isVmddashboard ? playgroundAppData : supabaseAppData,
   notifications: isVmddashboard ? playgroundNotifications : supabaseNotifications,
   mail: isVmddashboard ? playgroundMail : supabaseMail,
+  storage: isVmddashboard ? playgroundStorage : supabaseStorage,
 };

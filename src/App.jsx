@@ -373,6 +373,34 @@ export default function App() {
   useEffect(() => { if (appDataLoaded) saveKey('gtm_largegfx_photos', gtmLargeGfxPhotos); }, [gtmLargeGfxPhotos, appDataLoaded]);
   useEffect(() => { if (appDataLoaded) saveKey('gtm_largegfx_compare', gtmLargeGfxCompareOverrides); }, [gtmLargeGfxCompareOverrides, appDataLoaded]);
 
+  // 예전에 base64로 hq_items JSON에 통째로 박혀있던 시안 이미지를 Storage로 옮기고 URL만 남긴다 (1회성, admin만).
+  const sianMigratedRef = useRef(false);
+  useEffect(() => {
+    if (!appDataLoaded || isVmddashboard || user?.role !== "admin" || sianMigratedRef.current) return;
+    const hasLegacy = hqItems.some(it => (it.sianImages||[]).some(img => img.dataUrl && !img.url));
+    if (!hasLegacy) { sianMigratedRef.current = true; return; }
+    sianMigratedRef.current = true;
+    (async () => {
+      const migrated = await Promise.all(hqItems.map(async (item) => {
+        if (!(item.sianImages||[]).some(img => img.dataUrl && !img.url)) return item;
+        const sianImages = await Promise.all(item.sianImages.map(async (img) => {
+          if (img.url || !img.dataUrl) return img;
+          try {
+            const blob = await (await fetch(img.dataUrl)).blob();
+            const file = new File([blob], img.name || "시안.png", { type: blob.type });
+            const uploaded = await dataClient.storage.uploadImage(file);
+            if (uploaded) return { id: img.id, name: img.name, url: uploaded.url, path: uploaded.path };
+          } catch (err) {
+            console.error("[sian migration] failed for", img.name, err);
+          }
+          return img;
+        }));
+        return { ...item, sianImages };
+      }));
+      setHqItems(migrated);
+    })();
+  }, [appDataLoaded, hqItems, user?.role]);
+
   if (authLoading) return (
     <div style={{ display:"flex", alignItems:"center", justifyContent:"center", height:"100vh", background:"#f4f6fb" }}>
       <div style={{ fontSize:16, color:"#888" }}>불러오는 중...</div>
@@ -5501,23 +5529,58 @@ const styles2 = {
 // ─── 시안 이미지 팝업 ──────────────────────────────────────────────────────
 function SianPopup({ itemId, itemName, images, isAdmin, onSave, onClose }) {
   const [localImgs, setLocalImgs] = useState(images||[]);
+  const [uploading, setUploading] = useState(0);
   const fileRef = useRef(null);
   const [viewImg, setViewImg] = useState(null);
-  const handleUpload = e => {
-    Array.from(e.target.files).forEach(file=>{
-      const reader=new FileReader();
-      reader.onload=ev=>setLocalImgs(prev=>[...prev,{id:Date.now()+Math.random(),name:file.name,dataUrl:ev.target.result}]);
+  const imgSrc = img => img.url || img.dataUrl;
+  const handleUpload = async e => {
+    const files = Array.from(e.target.files);
+    e.target.value = "";
+    setUploading(n => n + files.length);
+    for (const file of files) {
+      try {
+        const uploaded = await dataClient.storage.uploadImage(file);
+        if (uploaded) {
+          setLocalImgs(prev => [...prev, { id: Date.now()+Math.random(), name: file.name, url: uploaded.url, path: uploaded.path }]);
+          setUploading(n => n - 1);
+          continue;
+        }
+      } catch (err) {
+        console.error("[SianPopup] Storage 업로드 실패, base64로 폴백:", err);
+      }
+      // Playground(스토리지 미지원) 또는 업로드 실패 시 기존 방식으로 폴백
+      const reader = new FileReader();
+      reader.onload = ev => {
+        setLocalImgs(prev => [...prev, { id: Date.now()+Math.random(), name: file.name, dataUrl: ev.target.result }]);
+        setUploading(n => n - 1);
+      };
       reader.readAsDataURL(file);
-    });
-    e.target.value="";
+    }
   };
-  const downloadImg = (img) => {
+  const handleSave = async () => {
+    const removed = (images||[]).filter(orig => !localImgs.some(l => l.id === orig.id));
+    await Promise.all(removed.map(img => dataClient.storage.deleteImage(img.path)));
+    onSave(localImgs);
+  };
+  const downloadImg = async (img) => {
+    const src = imgSrc(img);
+    let href = src, revoke = null;
+    if (/^https?:\/\//.test(src)) {
+      try {
+        const blob = await (await fetch(src)).blob();
+        href = URL.createObjectURL(blob);
+        revoke = href;
+      } catch (err) {
+        console.error("[SianPopup] 다운로드 실패:", err);
+      }
+    }
     const a = document.createElement("a");
-    a.href = img.dataUrl;
+    a.href = href;
     a.download = img.name || "시안.png";
     document.body.appendChild(a);
     a.click();
     a.remove();
+    if (revoke) URL.revokeObjectURL(revoke);
   };
   return (
     <div style={styles2.popupOverlay}>
@@ -5528,13 +5591,14 @@ function SianPopup({ itemId, itemName, images, isAdmin, onSave, onClose }) {
             onClick={()=>fileRef.current?.click()}>+ 이미지 업로드</button>
           <input ref={fileRef} type="file" accept="image/*" multiple style={{display:"none"}} onChange={handleUpload}/>
         </>)}
+        {uploading>0 && <div style={{fontSize:12,color:"#2e8b57"}}>⏳ 업로드 중... ({uploading})</div>}
         {localImgs.length===0
           ? <div style={{color:"#aaa",fontSize:13,textAlign:"center",padding:24}}>{isAdmin?"이미지를 업로드해주세요.":"등록된 시안이 없습니다."}</div>
           : <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10,width:"100%"}}>
               {localImgs.map(img=>(
                 <div key={img.id} style={{position:"relative",borderRadius:8,overflow:"hidden",border:"1px solid #eee",cursor:"pointer"}}
                   onClick={()=>setViewImg(img)}>
-                  <img src={img.dataUrl} alt={img.name} style={{width:"100%",height:120,objectFit:"cover"}}/>
+                  <img src={imgSrc(img)} alt={img.name} style={{width:"100%",height:120,objectFit:"cover"}}/>
                   <div style={{fontSize:11,color:"#666",padding:"4px 6px",background:"#f8f8f8",
                     overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{img.name}</div>
                   <button style={{position:"absolute",top:4,right:isAdmin?28:4,background:"rgba(0,0,0,0.5)",
@@ -5554,14 +5618,14 @@ function SianPopup({ itemId, itemName, images, isAdmin, onSave, onClose }) {
         <div style={{display:"flex",gap:10,width:"100%"}}>
           <button style={{...styles2.popupBtn,background:"#aaa",color:"#333",flex:1}} onClick={onClose}>취소</button>
           {isAdmin
-            ? <button style={{...styles2.popupBtn,flex:1}} onClick={()=>onSave(localImgs)}>저장</button>
+            ? <button style={{...styles2.popupBtn,flex:1}} onClick={handleSave}>저장</button>
             : <button style={{...styles2.popupBtn,flex:1}} onClick={onClose}>닫기</button>}
         </div>
       </div>
       {viewImg && createPortal(
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:10000,
           display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>setViewImg(null)}>
-          <img src={viewImg.dataUrl} alt={viewImg.name}
+          <img src={imgSrc(viewImg)} alt={viewImg.name}
             style={{maxWidth:"90vw",maxHeight:"90vh",width:"auto",height:"auto",borderRadius:8,objectFit:"contain",display:"block"}}/>
           <button style={{position:"absolute",top:24,right:76,background:"rgba(255,255,255,0.15)",
             color:"#fff",border:"none",borderRadius:"50%",width:40,height:40,fontSize:18,cursor:"pointer"}}
