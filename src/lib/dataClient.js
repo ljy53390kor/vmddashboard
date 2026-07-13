@@ -198,11 +198,28 @@ const playgroundNotifications = {
   },
 };
 
-// Playground(vmddashboard-svc) 백엔드는 아직 파일/오브젝트 스토리지 엔드포인트가 없다.
+// Playground Object Storage에 vmddashboard-svc(FastAPI)가 프록시로 업로드/삭제한다.
 // uploadImage가 null을 반환하면 호출부(SianPopup)가 기존 base64 dataURL 저장 방식으로 폴백한다.
 const playgroundStorage = {
-  uploadImage: async () => null,
-  deleteImage: async () => {},
+  uploadImage: async (file) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const res = await fetch(`${API_BASE}/files`, {
+      method: 'POST',
+      credentials: 'include',
+      body: formData,
+    });
+    if (res.status !== 200) return null;
+    const body = await res.json();
+    return { url: body.url, path: body.path };
+  },
+  deleteImage: async (path) => {
+    if (!path) return;
+    await fetch(`${API_BASE}/files?path=${encodeURIComponent(path)}`, {
+      method: 'DELETE',
+      credentials: 'include',
+    });
+  },
 };
 
 const playgroundMail = {

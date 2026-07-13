@@ -376,7 +376,7 @@ export default function App() {
   // 예전에 base64로 hq_items JSON에 통째로 박혀있던 시안 이미지를 Storage로 옮기고 URL만 남긴다 (1회성, admin만).
   const sianMigratedRef = useRef(false);
   useEffect(() => {
-    if (!appDataLoaded || isVmddashboard || user?.role !== "admin" || sianMigratedRef.current) return;
+    if (!appDataLoaded || user?.role !== "admin" || sianMigratedRef.current) return;
     const hasLegacy = hqItems.some(it => (it.sianImages||[]).some(img => img.dataUrl && !img.url));
     if (!hasLegacy) { sianMigratedRef.current = true; return; }
     sianMigratedRef.current = true;
