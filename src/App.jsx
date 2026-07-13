@@ -4441,6 +4441,17 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
   // 필터 드롭다운의 개수 표시는 현재 보고 있는 섹션(전체 목록 vs 누락 매장) 기준이어야 한다.
   const filterCountSource = (isStore && activeSection === "missing") ? missingStores : data;
 
+  // 취합 데이터의 "소속"은 본부명 하나만으로 판단하지 않고 구분과의 조합으로 판단한다.
+  // 유통사업부는 구분 또는 본부 어느 쪽에 적혀있어도 인정하고, 그 외 지역(수도권/부산/대구/서부/중부)은
+  // 반드시 "구분=지역본부" & "본부=해당 지역" 조합일 때만 그 소속으로 인정한다.
+  const resolveRowScope = (gubun, hq) => {
+    const g = String(gubun||"").trim();
+    const h = String(hq||"").trim();
+    if (g === "유통사업부" || g === "PS&M" || h === "유통사업부") return "유통사업부";
+    if (g === "지역본부") return normalizeGtmRegion(h) || null;
+    return null;
+  };
+
   const handleUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -4481,15 +4492,16 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
           const startRow = headerRowIdx >= 0 ? headerRowIdx+1 : 2;
           const get = (r, idx, fallbackIdx) => (idx>=0 ? r[idx] : r[fallbackIdx]);
           const dataRows = rows.slice(startRow).filter(r => (storeCodeCol>=0 ? r[storeCodeCol] : r[5]) != null);
+          const rowHq = (r) => resolveRowScope(get(r, guCol, 0), get(r, hqCol, 1)) || get(r, hqCol, 1);
           // 파일 자체에 적힌 본부 값(검증용). uploadRegion으로 강제 덮어쓰기 전의 원본 값을 별도로 남겨둔다.
-          fileHqRegions = new Set(dataRows.map(r => normalizeGtmRegion(get(r, hqCol, 1))).filter(Boolean));
+          fileHqRegions = new Set(dataRows.map(r => rowHq(r)).filter(Boolean));
           parsed = dataRows.map((r,i) => {
             const qty = get(r, qtyCol, 10);
             return {
               id: Date.now()+i,
               구분: get(r, guCol, 0),
               // 관리자는 파일 자체의 본부 값을 그대로 사용(여러 본부 한번에 업로드), 일반 계정은 선택한 본부로 강제 지정
-              본부: isAdmin ? get(r, hqCol, 1) : uploadRegion,
+              본부: isAdmin ? rowHq(r) : uploadRegion,
               마케팅팀: get(r, teamCol, 2),
               대리점코드: String(get(r, agentCodeCol, 3)||"").trim(),
               대리점명: get(r, agentNameCol, 4),
@@ -4665,8 +4677,9 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
           dataRows.forEach(r => {
             const code = String(r[5]||"").trim();
             if (!code) return;
+            const 본부 = resolveRowScope(r[0], r[1]) || String(r[1]||"").trim();
             updatesByCode.set(code, {
-              구분:r[0], 본부:r[1], 마케팅팀:r[2],
+              구분:r[0], 본부, 마케팅팀:r[2],
               대리점코드:String(r[3]||"").trim(), 대리점명:r[4],
               매장코드:code, 매장명:r[6], 주소:r[7],
               단면양면:r[8], 슬롯:r[9], 이전수량:r[10],
@@ -4677,8 +4690,8 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
           // (매장코드 매칭 갱신이 아니라, 그 본부 소속 전체를 새 목록으로 교체)
           const regionsInFile = new Set([...updatesByCode.values()].map(f=>f.본부));
           if (!isAdmin) {
-            // 자기 소속이 아닌 본부의 파일을 재업로드하면 튕기기
-            const mismatched = [...regionsInFile].filter(r => normalizeGtmRegion(r) !== uploadRegion);
+            // 자기 소속이 아닌 본부의 파일을 재업로드하면 튕기기 (구분+본부 조합이 선택한 소속과 다르면 거부)
+            const mismatched = [...regionsInFile].filter(r => r !== uploadRegion);
             if (mismatched.length > 0) {
               setReuploadStatus({type:"error", msg:`선택한 소속(${uploadRegion})과 다른 본부(${mismatched.join(", ")})의 데이터가 파일에 포함되어 있어 업로드를 거부했습니다. 본인 소속 파일만 업로드해주세요.`});
               return;
@@ -4710,8 +4723,9 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
           const updatesByRegion = new Map();
           dataRows.forEach(r => {
             if (r[0]!=null && String(r[0]).trim()!=="") lastGroup = String(r[0]).trim();
-            const region = String(r[1]||"").trim();
-            if (!region) return;
+            const rawRegion = String(r[1]||"").trim();
+            if (!rawRegion) return;
+            const region = resolveRowScope(lastGroup, rawRegion) || rawRegion;
             const 이전수량 = r[2];
             const 신규수량 = (r[3]!==undefined && r[3]!==null && r[3]!=="") ? r[3] : 이전수량;
             updatesByRegion.set(region, { 구분:lastGroup, 본부:region, 이전수량, 신규수량 });
