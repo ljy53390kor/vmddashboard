@@ -4444,7 +4444,7 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
   const handleUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    if (isStore && !isAdmin && !uploadRegion) {
+    if (!isAdmin && !uploadRegion) {
       setUploadStatus({type:"error", msg:"먼저 어느 본부 소속 데이터인지 선택해주세요."});
       e.target.value="";
       return;
@@ -4647,7 +4647,7 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
   const handleReuploadResult = (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    if (isStore && !isAdmin && !uploadRegion) {
+    if (!isAdmin && !uploadRegion) {
       setReuploadStatus({type:"error", msg:"먼저 어느 본부 소속 데이터인지 선택해주세요."});
       e.target.value="";
       return;
@@ -4658,48 +4658,91 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
         const wb = XLSX.read(ev.target.result, {type:"array"});
         const ws = wb.Sheets[wb.SheetNames[0]];
         const rows = XLSX.utils.sheet_to_json(ws, {header:1});
-        const dataRows = rows.slice(1).filter(r=>r[5]);
-        const updatesByCode = new Map();
-        dataRows.forEach(r => {
-          const code = String(r[5]||"").trim();
-          if (!code) return;
-          updatesByCode.set(code, {
-            구분:r[0], 본부:r[1], 마케팅팀:r[2],
-            대리점코드:String(r[3]||"").trim(), 대리점명:r[4],
-            매장코드:code, 매장명:r[6], 주소:r[7],
-            단면양면:r[8], 슬롯:r[9], 이전수량:r[10],
-            신규수량: (r[11]!==undefined && r[11]!==null && r[11]!=="") ? r[11] : r[10], // 수량 열이 비어있으면 이전수량을 그대로 사용
+
+        if (isStore) {
+          const dataRows = rows.slice(1).filter(r=>r[5]);
+          const updatesByCode = new Map();
+          dataRows.forEach(r => {
+            const code = String(r[5]||"").trim();
+            if (!code) return;
+            updatesByCode.set(code, {
+              구분:r[0], 본부:r[1], 마케팅팀:r[2],
+              대리점코드:String(r[3]||"").trim(), 대리점명:r[4],
+              매장코드:code, 매장명:r[6], 주소:r[7],
+              단면양면:r[8], 슬롯:r[9], 이전수량:r[10],
+              신규수량: (r[11]!==undefined && r[11]!==null && r[11]!=="") ? r[11] : r[10], // 수량 열이 비어있으면 이전수량을 그대로 사용
+            });
           });
-        });
-        // 업로드 파일에 포함된 본부(들)는 기존 pool을 통째로 비우고 이 파일 내용으로만 다시 채움
-        // (매장코드 매칭 갱신이 아니라, 그 본부 소속 전체를 새 목록으로 교체)
-        const regionsInFile = new Set([...updatesByCode.values()].map(f=>f.본부));
-        if (isStore && !isAdmin) {
-          // 자기 소속이 아닌 본부의 파일을 재업로드하면 튕기기
-          const mismatched = [...regionsInFile].filter(r => normalizeGtmRegion(r) !== uploadRegion);
-          if (mismatched.length > 0) {
-            setReuploadStatus({type:"error", msg:`선택한 소속(${uploadRegion})과 다른 본부(${mismatched.join(", ")})의 데이터가 파일에 포함되어 있어 업로드를 거부했습니다. 본인 소속 파일만 업로드해주세요.`});
-            return;
-          }
-        }
-        // 실제로 반영하기 전에, 이전 결과 대비 무엇이 바뀌는지(삭제/추가/수량변경) 미리보기로 보여주고 확인받는다.
-        const oldInRegion = data.filter(r => regionsInFile.has(r.본부));
-        const oldByCode = new Map(oldInRegion.map(r=>[r.매장코드, r]));
-        const added = [], changed = [];
-        updatesByCode.forEach((fields, code) => {
-          const old = oldByCode.get(code);
-          if (!old) {
-            added.push(fields);
-          } else {
-            const beforeQty = Number(old.신규수량)||0;
-            const afterQty = Number(fields.신규수량)||0;
-            if (beforeQty !== afterQty) {
-              changed.push({ 매장코드:code, 매장명:fields.매장명, before:beforeQty, after:afterQty });
+          // 업로드 파일에 포함된 본부(들)는 기존 pool을 통째로 비우고 이 파일 내용으로만 다시 채움
+          // (매장코드 매칭 갱신이 아니라, 그 본부 소속 전체를 새 목록으로 교체)
+          const regionsInFile = new Set([...updatesByCode.values()].map(f=>f.본부));
+          if (!isAdmin) {
+            // 자기 소속이 아닌 본부의 파일을 재업로드하면 튕기기
+            const mismatched = [...regionsInFile].filter(r => normalizeGtmRegion(r) !== uploadRegion);
+            if (mismatched.length > 0) {
+              setReuploadStatus({type:"error", msg:`선택한 소속(${uploadRegion})과 다른 본부(${mismatched.join(", ")})의 데이터가 파일에 포함되어 있어 업로드를 거부했습니다. 본인 소속 파일만 업로드해주세요.`});
+              return;
             }
           }
-        });
-        const removed = oldInRegion.filter(r => !updatesByCode.has(r.매장코드));
-        setReuploadPreview({ regionsInFile, updatesByCode, added, removed, changed, fileName:file.name });
+          // 실제로 반영하기 전에, 이전 결과 대비 무엇이 바뀌는지(삭제/추가/수량변경) 미리보기로 보여주고 확인받는다.
+          const oldInRegion = data.filter(r => regionsInFile.has(r.본부));
+          const oldByCode = new Map(oldInRegion.map(r=>[r.매장코드, r]));
+          const added = [], changed = [];
+          updatesByCode.forEach((fields, code) => {
+            const old = oldByCode.get(code);
+            if (!old) {
+              added.push({ key:code, label:fields.매장명, qty:fields.신규수량 });
+            } else {
+              const beforeQty = Number(old.신규수량)||0;
+              const afterQty = Number(fields.신규수량)||0;
+              if (beforeQty !== afterQty) {
+                changed.push({ key:code, label:fields.매장명, before:beforeQty, after:afterQty });
+              }
+            }
+          });
+          const removed = oldInRegion.filter(r => !updatesByCode.has(r.매장코드))
+            .map(r=>({ key:r.매장코드, label:r.매장명, qty:r.신규수량 }));
+          setReuploadPreview({ mode:"store", regionsInFile, updatesByCode, added, removed, changed, fileName:file.name });
+        } else {
+          // 행잉배너 등 hq 포맷: [구분,본부,이전 취합 수량,희망 수량] — 구분은 그룹 첫 행에만 존재(병합 셀)
+          const dataRows = rows.slice(1).filter(r=>r[1]!=null);
+          let lastGroup = "";
+          const updatesByRegion = new Map();
+          dataRows.forEach(r => {
+            if (r[0]!=null && String(r[0]).trim()!=="") lastGroup = String(r[0]).trim();
+            const region = String(r[1]||"").trim();
+            if (!region) return;
+            const 이전수량 = r[2];
+            const 신규수량 = (r[3]!==undefined && r[3]!==null && r[3]!=="") ? r[3] : 이전수량;
+            updatesByRegion.set(region, { 구분:lastGroup, 본부:region, 이전수량, 신규수량 });
+          });
+          const regionsInFile = new Set([...updatesByRegion.keys()]);
+          if (!isAdmin) {
+            const mismatched = [...regionsInFile].filter(r => r !== uploadRegion);
+            if (mismatched.length > 0) {
+              setReuploadStatus({type:"error", msg:`선택한 소속(${uploadRegion})과 다른 본부(${mismatched.join(", ")})의 데이터가 파일에 포함되어 있어 업로드를 거부했습니다. 본인 소속 파일만 업로드해주세요.`});
+              return;
+            }
+          }
+          const oldInRegion = data.filter(r => regionsInFile.has(r.본부));
+          const oldByRegion = new Map(oldInRegion.map(r=>[r.본부, r]));
+          const added = [], changed = [];
+          updatesByRegion.forEach((fields, region) => {
+            const old = oldByRegion.get(region);
+            if (!old) {
+              added.push({ key:region, label:region, qty:fields.신규수량 });
+            } else {
+              const beforeQty = Number(old.신규수량)||0;
+              const afterQty = Number(fields.신규수량)||0;
+              if (beforeQty !== afterQty) {
+                changed.push({ key:region, label:region, before:beforeQty, after:afterQty });
+              }
+            }
+          });
+          const removed = oldInRegion.filter(r => !updatesByRegion.has(r.본부))
+            .map(r=>({ key:r.본부, label:r.본부, qty:r.신규수량 }));
+          setReuploadPreview({ mode:"hq", regionsInFile, updatesByRegion, added, removed, changed, fileName:file.name });
+        }
       } catch(err) {
         setReuploadStatus({type:"error", msg:"오류: "+err.message});
       }
@@ -4710,13 +4753,24 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
 
   const confirmReupload = () => {
     if (!reuploadPreview) return;
-    const { regionsInFile, updatesByCode } = reuploadPreview;
-    setData(prev => {
-      const kept = prev.filter(r => !regionsInFile.has(r.본부));
-      const newRows = [...updatesByCode.values()].map((fields,i) => ({ id: Date.now()+i, ...fields }));
-      return [...kept, ...newRows];
-    });
-    setReuploadStatus({type:"success", msg:`${[...regionsInFile].join(", ")} ${updatesByCode.size}개 매장으로 교체 완료`});
+    const { mode, regionsInFile } = reuploadPreview;
+    if (mode === "store") {
+      const { updatesByCode } = reuploadPreview;
+      setData(prev => {
+        const kept = prev.filter(r => !regionsInFile.has(r.본부));
+        const newRows = [...updatesByCode.values()].map((fields,i) => ({ id: Date.now()+i, ...fields }));
+        return [...kept, ...newRows];
+      });
+      setReuploadStatus({type:"success", msg:`${[...regionsInFile].join(", ")} ${updatesByCode.size}개 매장으로 교체 완료`});
+    } else {
+      const { updatesByRegion } = reuploadPreview;
+      setData(prev => {
+        const kept = prev.filter(r => !regionsInFile.has(r.본부));
+        const newRows = [...updatesByRegion.values()].map((fields,i) => ({ id: Date.now()+i, ...fields }));
+        return [...kept, ...newRows];
+      });
+      setReuploadStatus({type:"success", msg:`${[...regionsInFile].join(", ")} 데이터 교체 완료`});
+    }
     setReuploadPreview(null);
   };
 
@@ -4787,12 +4841,12 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
         <div style={{fontSize:15, fontWeight:800, marginBottom:10}}>📂 {sectionLabel} 데이터 업로드</div>
         <div style={{fontSize:12, color:"#888", marginBottom:12}}>
           기존 {sectionLabel} 배송 리스트 엑셀 파일을 업로드하면 이전 수량이 자동으로 로드됩니다.
-          {isStore && (isAdmin
+          {isAdmin
             ? " 관리자는 본부 선택 없이 전체 데이터를 한 번에 업로드합니다."
-            : " 최초 업로드는 관리자만 가능하며, 일반 계정은 아래 \"취합 결과 업로드\"로 선택한 본부 데이터만 제출합니다.")}
+            : " 최초 업로드는 관리자만 가능하며, 일반 계정은 아래 \"취합 결과 업로드\"로 선택한 본부 데이터만 제출합니다."}
         </div>
         <div style={{display:"flex", gap:8, alignItems:"center", flexWrap:"wrap"}}>
-          {isStore && !isAdmin && (
+          {!isAdmin && (
             <select value={uploadRegion} onChange={e=>setUploadRegion(e.target.value)}
               style={{padding:"7px 12px", borderRadius:8, border:"1px solid #ddd",
                 fontSize:12.5, fontWeight:600, color: uploadRegion?"#444":"#c00", background:"#fff", cursor:"pointer"}}>
@@ -4800,7 +4854,7 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
               {WIDECOLOR_UPLOAD_SCOPES.map(r=>(<option key={r} value={r}>{r}</option>))}
             </select>
           )}
-          {(!isStore || isAdmin) && (
+          {isAdmin && (
             <>
               <button style={{...settingsBtn("#1d6fa4"), padding:"7px 18px", fontSize:12}}
                 onClick={()=>fileRef.current?.click()}>📂 파일 선택</button>
@@ -4811,7 +4865,7 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
             <button style={{...settingsBtn("#2e8b57"), padding:"7px 18px", fontSize:12}}
               onClick={downloadResult}>⬇ 수량취합 엑셀 다운로드</button>
           )}
-          {isStore && data.length > 0 && (
+          {data.length > 0 && (
             <>
               <button style={{...settingsBtn("#e8420a"), padding:"7px 18px", fontSize:12}}
                 onClick={()=>reuploadFileRef.current?.click()}>📤 취합 결과 업로드</button>
@@ -4833,9 +4887,11 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
             </span>
           )}
         </div>
-        {isStore && data.length > 0 && (
+        {data.length > 0 && (
           <div style={{fontSize:11, color:"#aaa", marginTop:8}}>
-            "⬇ 수량취합 엑셀 다운로드"로 받은 파일을 그대로 수정해서 "📤 취합 결과 업로드"로 다시 올리면, 매장코드를 기준으로 전체 목록에 덮어써집니다 (없는 매장코드는 새로 추가됩니다).
+            {isStore
+              ? "\"⬇ 수량취합 엑셀 다운로드\"로 받은 파일을 그대로 수정해서 \"📤 취합 결과 업로드\"로 다시 올리면, 매장코드를 기준으로 전체 목록에 덮어써집니다 (없는 매장코드는 새로 추가됩니다). 일반 계정은 선택한 본부 데이터만 반영되고, 업로드 전 변경 내역을 확인할 수 있습니다."
+              : "\"⬇ 수량취합 엑셀 다운로드\"로 받은 파일을 그대로 수정해서 \"📤 취합 결과 업로드\"로 다시 올리면, 본부를 기준으로 덮어써집니다. 일반 계정은 선택한 본부 데이터만 반영되고, 업로드 전 변경 내역을 확인할 수 있습니다."}
           </div>
         )}
       </div>
@@ -5151,15 +5207,15 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
             )}
             {reuploadPreview.removed.length>0 && (
               <div>
-                <div style={{fontSize:13, fontWeight:700, color:"#c00", marginBottom:6}}>🗑 삭제된 매장 ({reuploadPreview.removed.length}개)</div>
+                <div style={{fontSize:13, fontWeight:700, color:"#c00", marginBottom:6}}>🗑 삭제된 {reuploadPreview.mode==="store"?"매장":"항목"} ({reuploadPreview.removed.length}개)</div>
                 <div style={{maxHeight:160, overflowY:"auto", border:"1px solid #ffdcdc", borderRadius:8}}>
                   <table style={{borderCollapse:"collapse", width:"100%", fontSize:12}}>
                     <tbody>
                       {reuploadPreview.removed.map(r=>(
-                        <tr key={r.매장코드} style={{background:"#fff5f5"}}>
-                          <td style={{...tD, color:"#c00"}}>{r.매장코드}</td>
-                          <td style={tD}>{r.매장명}</td>
-                          <td style={{...tD, textAlign:"right", color:"#888"}}>{r.신규수량 || 0}개</td>
+                        <tr key={r.key} style={{background:"#fff5f5"}}>
+                          <td style={{...tD, color:"#c00"}}>{r.key}</td>
+                          {reuploadPreview.mode==="store" && <td style={tD}>{r.label}</td>}
+                          <td style={{...tD, textAlign:"right", color:"#888"}}>{r.qty || 0}개</td>
                         </tr>
                       ))}
                     </tbody>
@@ -5169,15 +5225,15 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
             )}
             {reuploadPreview.added.length>0 && (
               <div>
-                <div style={{fontSize:13, fontWeight:700, color:"#2e8b57", marginBottom:6}}>🆕 추가된 매장 ({reuploadPreview.added.length}개)</div>
+                <div style={{fontSize:13, fontWeight:700, color:"#2e8b57", marginBottom:6}}>🆕 추가된 {reuploadPreview.mode==="store"?"매장":"항목"} ({reuploadPreview.added.length}개)</div>
                 <div style={{maxHeight:160, overflowY:"auto", border:"1px solid #d5f0e0", borderRadius:8}}>
                   <table style={{borderCollapse:"collapse", width:"100%", fontSize:12}}>
                     <tbody>
                       {reuploadPreview.added.map(r=>(
-                        <tr key={r.매장코드} style={{background:"#f2fbf6"}}>
-                          <td style={{...tD, color:"#2e8b57"}}>{r.매장코드}</td>
-                          <td style={tD}>{r.매장명}</td>
-                          <td style={{...tD, textAlign:"right", fontWeight:700, color:"#2e8b57"}}>{r.신규수량 || 0}개</td>
+                        <tr key={r.key} style={{background:"#f2fbf6"}}>
+                          <td style={{...tD, color:"#2e8b57"}}>{r.key}</td>
+                          {reuploadPreview.mode==="store" && <td style={tD}>{r.label}</td>}
+                          <td style={{...tD, textAlign:"right", fontWeight:700, color:"#2e8b57"}}>{r.qty || 0}개</td>
                         </tr>
                       ))}
                     </tbody>
@@ -5187,14 +5243,14 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
             )}
             {reuploadPreview.changed.length>0 && (
               <div>
-                <div style={{fontSize:13, fontWeight:700, color:"#1d6fa4", marginBottom:6}}>✏️ 수량 변경된 매장 ({reuploadPreview.changed.length}개)</div>
+                <div style={{fontSize:13, fontWeight:700, color:"#1d6fa4", marginBottom:6}}>✏️ 수량 변경된 {reuploadPreview.mode==="store"?"매장":"항목"} ({reuploadPreview.changed.length}개)</div>
                 <div style={{maxHeight:160, overflowY:"auto", border:"1px solid #d5e6f5", borderRadius:8}}>
                   <table style={{borderCollapse:"collapse", width:"100%", fontSize:12}}>
                     <tbody>
                       {reuploadPreview.changed.map(r=>(
-                        <tr key={r.매장코드} style={{background:"#f2f8fd"}}>
-                          <td style={{...tD, color:"#1d6fa4"}}>{r.매장코드}</td>
-                          <td style={tD}>{r.매장명}</td>
+                        <tr key={r.key} style={{background:"#f2f8fd"}}>
+                          <td style={{...tD, color:"#1d6fa4"}}>{r.key}</td>
+                          {reuploadPreview.mode==="store" && <td style={tD}>{r.label}</td>}
                           <td style={{...tD, textAlign:"right"}}>
                             <span style={{color:"#888"}}>{r.before}개</span> → <span style={{fontWeight:700, color:"#1d6fa4"}}>{r.after}개</span>
                           </td>
