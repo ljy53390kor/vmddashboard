@@ -4944,10 +4944,17 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
     setReuploadPreview(null);
   };
 
-  // 전체 목록 제출과 누락 매장 제출을 별개로 추적: submissions = { list: {...}, missing: {...} }
-  const submissionScope = (isStore && activeSection === "missing") ? "missing" : "list";
-  const scopeLabel = submissionScope === "missing" ? "누락 매장" : "전체 목록";
-  const submission = hqFilter!=="전체" ? (submissions[submissionScope]||{})[hqFilter] : null;
+  // 예전에는 "전체 목록"과 "누락 매장"을 별도로 제출/잠금 처리했다(submissions = { list:{}, missing:{} }).
+  // 이제는 누락 매장을 다 확인해야만 전체를 제출할 수 있는 통합 제출 하나로 합친다.
+  // 기존에 저장된 예전 형태(list/missing로 나뉜 값)를 만나면 그중 하나라도 제출된 적 있으면
+  // 이미 제출된 것으로 간주해 마이그레이션한다. 새로 쓰는 값은 항상 { [본부]: {...} } 평평한 형태.
+  const unifiedSubmissions = (submissions && (submissions.list || submissions.missing))
+    ? Object.fromEntries(filterOptions.map(o => {
+        const prev = submissions.list?.[o.key] || submissions.missing?.[o.key];
+        return [o.key, prev || { submitted:false }];
+      }))
+    : (submissions || {});
+  const submission = hqFilter!=="전체" ? unifiedSubmissions[hqFilter] : null;
   const isSubmitted = !!submission?.submitted;
   const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
 
@@ -4955,16 +4962,22 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
   // (관리자가 아닌 이상) 수정할 수 없어야 한다. hqFilter로만 판단하면 필터를 "전체"로 바꿨을 때
   // 이미 제출된 본부의 값도 다시 수정 가능해지는 문제가 있었다.
   const rowScopeOf = (row) => isStore ? row.본부 : (resolveRowScope(row.구분, row.본부) || row.본부);
-  const isRowLocked = (row) => !isAdmin && !!(submissions[submissionScope]||{})[rowScopeOf(row)]?.submitted;
+  const isRowLocked = (row) => !isAdmin && !!unifiedSubmissions[rowScopeOf(row)]?.submitted;
+
+  // 제출하려는 본부의 누락 매장이 하나라도 "확인" 안 됐으면 제출할 수 없다.
+  const missingUnconfirmedCount = hqFilter!=="전체"
+    ? missingStores.filter(s => s.본부===hqFilter && !s.확인여부).length
+    : 0;
+  const canSubmit = hqFilter!=="전체" && missingUnconfirmedCount===0;
 
   const handleSubmit = () => {
-    if (hqFilter === "전체") return;
-    setSubmissions(prev => ({ ...prev, [submissionScope]: { ...(prev[submissionScope]||{}), [hqFilter]: { submitted:true, submittedAt:new Date().toISOString() } } }));
+    if (!canSubmit) return;
+    setSubmissions({ ...unifiedSubmissions, [hqFilter]: { submitted:true, submittedAt:new Date().toISOString() } });
     setShowSubmitConfirm(false);
   };
   const handleCancelSubmit = () => {
     if (hqFilter === "전체") return;
-    setSubmissions(prev => ({ ...prev, [submissionScope]: { ...(prev[submissionScope]||{}), [hqFilter]: { submitted:false, submittedAt:null } } }));
+    setSubmissions({ ...unifiedSubmissions, [hqFilter]: { submitted:false, submittedAt:null } });
   };
 
   return (
@@ -4974,36 +4987,27 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
         <div style={{background:"#fff", borderRadius:14, boxShadow:"0 2px 16px rgba(0,0,0,0.07)", padding:20}}>
           <div style={{fontSize:14, fontWeight:800, marginBottom:12, color:"#333"}}>✅ 사업부별 제출 현황(관리자 전용)</div>
           <div style={{overflowX:"auto"}}>
-            <table style={{borderCollapse:"collapse", width:"100%", minWidth: isStore?680:480, fontSize:12.5}}>
+            <table style={{borderCollapse:"collapse", width:"100%", minWidth:480, fontSize:12.5}}>
               <thead>
                 <tr style={{background:"#f0f4f8"}}>
                   <th style={tH}>지역담당</th>
-                  <th style={tH}>{isStore ? "전체 목록 제출" : "제출여부"}</th>
-                  <th style={tH}>{isStore ? "전체 목록 제출 일시" : "제출 일시"}</th>
-                  {isStore && <th style={tH}>누락 매장 제출</th>}
-                  {isStore && <th style={tH}>누락 매장 제출 일시</th>}
+                  <th style={tH}>제출여부</th>
+                  <th style={tH}>제출 일시</th>
                 </tr>
               </thead>
               <tbody>
                 {filterOptions.map((opt,i)=>{
-                  const listSub = (submissions.list||{})[opt.key];
-                  const missingSub = (submissions.missing||{})[opt.key];
-                  const statusCell = (sub) => sub?.submitted
+                  const sub = unifiedSubmissions[opt.key];
+                  const statusCell = (s) => s?.submitted
                     ? <span style={{color:"#2e8b57", fontWeight:700}}>✅ 제출완료</span>
                     : <span style={{color:"#aaa"}}>⏳ 미제출</span>;
                   return (
                     <tr key={opt.key} style={{background:i%2===0?"#fafafa":"#fff"}}>
                       <td style={{...tD, textAlign:"center", fontWeight:700}}>{opt.label}</td>
-                      <td style={{...tD, textAlign:"center"}}>{statusCell(listSub)}</td>
+                      <td style={{...tD, textAlign:"center"}}>{statusCell(sub)}</td>
                       <td style={{...tD, textAlign:"center", color:"#666"}}>
-                        {listSub?.submittedAt ? new Date(listSub.submittedAt).toLocaleString('ko-KR') : "-"}
+                        {sub?.submittedAt ? new Date(sub.submittedAt).toLocaleString('ko-KR') : "-"}
                       </td>
-                      {isStore && <td style={{...tD, textAlign:"center"}}>{statusCell(missingSub)}</td>}
-                      {isStore && (
-                        <td style={{...tD, textAlign:"center", color:"#666"}}>
-                          {missingSub?.submittedAt ? new Date(missingSub.submittedAt).toLocaleString('ko-KR') : "-"}
-                        </td>
-                      )}
                     </tr>
                   );
                 })}
@@ -5109,15 +5113,22 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
                 {isSubmitted && (
                   <span style={{fontSize:12, fontWeight:700, color:"#2e8b57", background:"#e8f8ee",
                     padding:"6px 12px", borderRadius:8}}>
-                    ✅ {scopeLabel} 제출완료 ({new Date(submission.submittedAt).toLocaleString('ko-KR')})
+                    ✅ 제출완료 ({new Date(submission.submittedAt).toLocaleString('ko-KR')})
+                  </span>
+                )}
+                {!isSubmitted && missingUnconfirmedCount > 0 && (
+                  <span style={{fontSize:12, fontWeight:700, color:"#c00", background:"#fff0f0",
+                    padding:"6px 12px", borderRadius:8}}>
+                    ⚠️ 누락 매장 {missingUnconfirmedCount}건 확인 필요
                   </span>
                 )}
                 <button
                   onClick={()=>setShowSubmitConfirm(true)}
-                  disabled={isSubmitted}
-                  style={{...settingsBtn(isSubmitted?"#bbb":"#e8420a"), padding:"7px 18px", fontSize:12.5,
-                    cursor:isSubmitted?"default":"pointer"}}>
-                  {isSubmitted ? `${scopeLabel} 제출완료` : `${scopeLabel} 제출하기`}
+                  disabled={isSubmitted || !canSubmit}
+                  title={!canSubmit && !isSubmitted ? "누락 매장을 모두 확인해야 제출할 수 있습니다." : undefined}
+                  style={{...settingsBtn(isSubmitted?"#bbb":(canSubmit?"#e8420a":"#ddd")), padding:"7px 18px", fontSize:12.5,
+                    cursor:(isSubmitted||!canSubmit)?"not-allowed":"pointer"}}>
+                  {isSubmitted ? "제출완료" : "제출하기"}
                 </button>
                 {isAdmin && isSubmitted && (
                   <button onClick={handleCancelSubmit}
