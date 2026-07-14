@@ -242,3 +242,14 @@ export const dataClient = {
   mail: isVmddashboard ? playgroundMail : supabaseMail,
   storage: isVmddashboard ? playgroundStorage : supabaseStorage,
 };
+
+// 특정 키 하나의 "지금 서버에 있는" 값만 조회한다. 여러 세션이 같은 app_data 키를 동시에
+// 쓸 때, 각자 로그인 시점 스냅샷을 그대로 덮어써서 서로의 변경을 지워버리는 문제를 막기 위해
+// 저장 직전에 최신 값을 확인하고 병합하는 용도로 쓴다. 두 백엔드 모두 키별 GET이 없어서
+// loadAll을 재사용해 필터링한다 (약간 비효율적이지만 백엔드 변경 없이 동작).
+export async function loadAppDataKey(key) {
+  const { data } = await dataClient.appData.loadAll();
+  if (!data) return undefined;
+  const row = data.find(r => r.key === key);
+  return row ? row.value : undefined;
+}

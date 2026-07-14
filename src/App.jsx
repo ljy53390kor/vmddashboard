@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import * as XLSX from "xlsx-js-style";
-import { dataClient } from "./lib/dataClient";
+import { dataClient, loadAppDataKey } from "./lib/dataClient";
 import { isVmddashboard } from "./lib/target";
 import { loadHolidays } from "./lib/holidays";
 
@@ -124,6 +124,84 @@ const INITIAL_CONFIRMED = {
 // status: "pending" = 회색 원 (임시 지정, SK 컨펌 대기)
 //         "confirmed" = 빨간 원 (SK 컨펌 완료)
 const DOW_KR = ["일","월","화","수","목","금","토"];
+
+// ─── 동시 저장 충돌 방지: 3-way 병합 ────────────────────────────────────
+// 이 앱은 로그인 시 한 번만 서버 데이터를 불러오고, 그 뒤로는 로컬 메모리 값을
+// 계속 씀. 여러 세션이 같은 app_data 키를 각자 들고 있다가 저장하면, 나중에
+// 저장하는 쪽이 다른 쪽의 변경을 통째로 덮어써서 "제출한 게 새로고침하다가
+// 어느 순간 사라짐" 같은 증상이 생김. 저장 직전에 (마지막 동기화 시점 값,
+// 지금 로컬 값, 지금 서버 값) 셋을 비교해 변경분만 합쳐서 충돌을 줄인다.
+function deepEqual(a, b) {
+  if (a === b) return true;
+  if (typeof a !== typeof b || a == null || b == null) return a === b;
+  if (typeof a !== "object") return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  if (Array.isArray(a)) {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (!deepEqual(a[i], b[i])) return false;
+    return true;
+  }
+  const ak = Object.keys(a), bk = Object.keys(b);
+  if (ak.length !== bk.length) return false;
+  for (const k of ak) {
+    if (!Object.prototype.hasOwnProperty.call(b, k) || !deepEqual(a[k], b[k])) return false;
+  }
+  return true;
+}
+
+function rowKeyOf(row, index) {
+  if (row && typeof row === "object") {
+    if (row.id !== undefined && row.id !== null) return `id:${row.id}`;
+    if (row.매장코드) return `sc:${row.매장코드}`;
+    if (row.key !== undefined) return `k:${row.key}`;
+  }
+  return `i:${index}`; // 식별자가 없으면 위치 기준(병합 이점은 없지만 최소한 깨지지는 않음)
+}
+
+function threeWayMerge(base, local, remote) {
+  if (base === undefined || remote === undefined || remote === null) return local;
+  if (deepEqual(local, remote)) return local;
+  if (deepEqual(local, base)) return remote; // 로컬은 안 바뀌었고 원격만 바뀜 → 원격 채택
+  if (deepEqual(remote, base)) return local; // 원격은 안 바뀌었고 로컬만 바뀜 → 로컬 채택
+
+  const isPlainObj = v => v && typeof v === "object" && !Array.isArray(v);
+
+  if (Array.isArray(local) && Array.isArray(remote) && Array.isArray(base)) {
+    const baseM = new Map(base.map((r, i) => [rowKeyOf(r, i), r]));
+    const localM = new Map(local.map((r, i) => [rowKeyOf(r, i), r]));
+    const remoteM = new Map(remote.map((r, i) => [rowKeyOf(r, i), r]));
+    const merged = [];
+    local.forEach((row, i) => {
+      const k = rowKeyOf(row, i);
+      const b = baseM.get(k), r = remoteM.get(k);
+      if (r === undefined) { merged.push(row); return; } // 로컬 신규 항목이거나 원격에서 삭제됨 → 로컬 유지
+      if (b !== undefined && deepEqual(row, b)) { merged.push(r); return; } // 로컬 무변경 → 원격 채택
+      if (b !== undefined && deepEqual(r, b)) { merged.push(row); return; } // 원격 무변경 → 로컬 채택
+      merged.push(threeWayMerge(b, row, r)); // 둘 다 변경(충돌) → 재귀 병합 시도
+    });
+    remote.forEach((row, i) => {
+      const k = rowKeyOf(row, i);
+      if (!localM.has(k) && !baseM.has(k)) merged.push(row); // 원격에만 새로 생긴 항목
+    });
+    return merged;
+  }
+
+  if (isPlainObj(local) && isPlainObj(remote) && isPlainObj(base)) {
+    const keys = new Set([...Object.keys(local), ...Object.keys(remote)]);
+    const out = {};
+    keys.forEach(k => {
+      const b = base[k], l = local[k], r = remote[k];
+      if (l === undefined) { if (r !== undefined) out[k] = r; return; }
+      if (r === undefined) { out[k] = l; return; }
+      if (deepEqual(l, b)) { out[k] = r; return; }
+      if (deepEqual(r, b)) { out[k] = l; return; }
+      out[k] = threeWayMerge(b, l, r);
+    });
+    return out;
+  }
+
+  return local; // 형태가 다르거나 원시값 충돌 → 로컬(방금 한 행동) 우선
+}
 
 // ═══════════════════════════════════════════════════════════════════════
 export default function App() {
@@ -290,33 +368,36 @@ export default function App() {
 
   // ── Supabase 영속 저장 ────────────────────────────────────────────────
   const [appDataLoaded, setAppDataLoaded] = useState(false);
+  // 각 키별로 "마지막으로 서버와 일치했던 값"을 들고 있다가, 저장 직전 3-way 병합의 기준(base)으로 쓴다.
+  const lastSyncedRef = useRef({});
 
   useEffect(() => {
     if (!user) { setAppDataLoaded(false); return; }
     (async () => {
       const { data } = await dataClient.appData.loadAll();
+      const synced = {};
       if (data) {
         const m = Object.fromEntries(data.map(r => [r.key, r.value]));
-        if (m.confirmed)            setConfirmed(m.confirmed);
-        if (m.temp_selected)        setTempSelected(new Set(m.temp_selected));
-        if (m.skn_confirmed_snap)   setSknConfirmedSnap(m.skn_confirmed_snap);
-        if (m.updated_dates)        setUpdatedDates(m.updated_dates);
-        if (m.pre_edit_snap)        setPreEditSnap(m.pre_edit_snap);
-        if (m.last_skn_confirmed)   setLastSKNConfirmed(m.last_skn_confirmed);
+        if (m.confirmed)            { setConfirmed(m.confirmed); synced.confirmed = m.confirmed; }
+        if (m.temp_selected)        { setTempSelected(new Set(m.temp_selected)); synced.temp_selected = m.temp_selected; }
+        if (m.skn_confirmed_snap)   { setSknConfirmedSnap(m.skn_confirmed_snap); synced.skn_confirmed_snap = m.skn_confirmed_snap; }
+        if (m.updated_dates)        { setUpdatedDates(m.updated_dates); synced.updated_dates = m.updated_dates; }
+        if (m.pre_edit_snap)        { setPreEditSnap(m.pre_edit_snap); synced.pre_edit_snap = m.pre_edit_snap; }
+        if (m.last_skn_confirmed)   { setLastSKNConfirmed(m.last_skn_confirmed); synced.last_skn_confirmed = m.last_skn_confirmed; }
         // last_revision_data는 메모리 전용 — 로그인마다 초기화되도록 로드하지 않음
-        if (m.mail_recipients)      setMailRecipients(m.mail_recipients);
-        if (m.skn_recipients)       setSknRecipients(m.skn_recipients);
-        if (m.shipping_groups)      setShippingGroups(m.shipping_groups);
-        if (m.hq_items)             setHqItems(m.hq_items);
-        if (m.store_list)           setStoreList(m.store_list);
-        if (m.shipping_table1)      setShippingTable1(m.shipping_table1);
-        if (m.shipping_step)        setShippingStep(m.shipping_step);
-        if (m.shipping_custom_cols) setShippingCustomCols(m.shipping_custom_cols);
-        if (m.shipping_next_col_id !== undefined) setShippingNextColId(m.shipping_next_col_id);
-        if (m.gtm_widecolor_data)   setGtmWideColorData(m.gtm_widecolor_data);
-        if (m.gtm_hanging_data)     setGtmHangingData(m.gtm_hanging_data);
-        if (m.gtm_submissions)      setGtmSubmissions(m.gtm_submissions);
-        if (m.gtm_new_store_list)   setGtmNewStoreList(m.gtm_new_store_list);
+        if (m.mail_recipients)      { setMailRecipients(m.mail_recipients); synced.mail_recipients = m.mail_recipients; }
+        if (m.skn_recipients)       { setSknRecipients(m.skn_recipients); synced.skn_recipients = m.skn_recipients; }
+        if (m.shipping_groups)      { setShippingGroups(m.shipping_groups); synced.shipping_groups = m.shipping_groups; }
+        if (m.hq_items)             { setHqItems(m.hq_items); synced.hq_items = m.hq_items; }
+        if (m.store_list)           { setStoreList(m.store_list); synced.store_list = m.store_list; }
+        if (m.shipping_table1)      { setShippingTable1(m.shipping_table1); synced.shipping_table1 = m.shipping_table1; }
+        if (m.shipping_step)        { setShippingStep(m.shipping_step); synced.shipping_step = m.shipping_step; }
+        if (m.shipping_custom_cols) { setShippingCustomCols(m.shipping_custom_cols); synced.shipping_custom_cols = m.shipping_custom_cols; }
+        if (m.shipping_next_col_id !== undefined) { setShippingNextColId(m.shipping_next_col_id); synced.shipping_next_col_id = m.shipping_next_col_id; }
+        if (m.gtm_widecolor_data)   { setGtmWideColorData(m.gtm_widecolor_data); synced.gtm_widecolor_data = m.gtm_widecolor_data; }
+        if (m.gtm_hanging_data)     { setGtmHangingData(m.gtm_hanging_data); synced.gtm_hanging_data = m.gtm_hanging_data; }
+        if (m.gtm_submissions)      { setGtmSubmissions(m.gtm_submissions); synced.gtm_submissions = m.gtm_submissions; }
+        if (m.gtm_new_store_list)   { setGtmNewStoreList(m.gtm_new_store_list); synced.gtm_new_store_list = m.gtm_new_store_list; }
         // gtm_largegfx_rounds/draft는 예전 버전(객체 형태)으로 저장된 값이 남아있을 수 있어 배열인 경우만 반영
         if (Array.isArray(m.gtm_largegfx_rounds)) {
           const filtered = m.gtm_largegfx_rounds.filter(r => r && typeof r.name==='string' && Array.isArray(r.data));
@@ -333,45 +414,85 @@ export default function App() {
           const known = CANONICAL_ORDER.map(n => validRounds.find(r=>r.name===n)).filter(Boolean);
           const extra = validRounds.filter(r => !CANONICAL_ORDER.includes(r.name));
           validRounds = [...known, ...extra];
-          if (validRounds.length > 0) setGtmLargeGfxRounds(validRounds);
+          if (validRounds.length > 0) { setGtmLargeGfxRounds(validRounds); synced.gtm_largegfx_rounds = validRounds; }
         }
-        if (Array.isArray(m.gtm_largegfx_draft)) setGtmLargeGfxDraft(m.gtm_largegfx_draft);
-        if (m.gtm_largegfx_photos)  setGtmLargeGfxPhotos(m.gtm_largegfx_photos);
-        if (m.gtm_largegfx_compare) setGtmLargeGfxCompareOverrides(m.gtm_largegfx_compare);
+        if (Array.isArray(m.gtm_largegfx_draft)) { setGtmLargeGfxDraft(m.gtm_largegfx_draft); synced.gtm_largegfx_draft = m.gtm_largegfx_draft; }
+        if (m.gtm_largegfx_photos)  { setGtmLargeGfxPhotos(m.gtm_largegfx_photos); synced.gtm_largegfx_photos = m.gtm_largegfx_photos; }
+        if (m.gtm_largegfx_compare) { setGtmLargeGfxCompareOverrides(m.gtm_largegfx_compare); synced.gtm_largegfx_compare = m.gtm_largegfx_compare; }
       }
+      lastSyncedRef.current = synced;
       setAppDataLoaded(true);
     })();
   }, [user?.id]);
 
-  const saveKey = useCallback(async (key, value) => {
-    const { error } = await dataClient.appData.saveKey(key, value);
-    if (error) console.error('[saveKey] upsert failed:', key, error);
+  // 저장 직전에 서버의 "지금" 값을 다시 불러와 (마지막 동기화 값, 로컬 값, 서버 값) 3-way 병합한다.
+  // 다른 세션이 그 사이 같은 키를 바꿔놨어도 서로의 변경을 지우지 않고 합쳐진다.
+  // 5초 안에 끝나지 않거나 실패하면 전역 팝업으로 알림 — 이전에는 실패해도 console.error만 찍히고
+  // 화면은 이미 바뀐 것처럼 보여서 "제출했는데 나중에 보니 사라짐" 같은 증상으로 이어졌음.
+  const [saveErrorPopup, setSaveErrorPopup] = useState(null); // { key } | null
+  const syncKey = useCallback(async (key, localValue, setLocal) => {
+    let settled = false;
+    const timeoutId = setTimeout(() => {
+      if (!settled) setSaveErrorPopup({ key });
+    }, 5000);
+    try {
+      const remote = await loadAppDataKey(key);
+      const base = lastSyncedRef.current[key];
+      const merged = threeWayMerge(base, localValue, remote);
+      if (!deepEqual(merged, localValue) && setLocal) setLocal(merged);
+      lastSyncedRef.current[key] = merged;
+      const { error } = await dataClient.appData.saveKey(key, merged);
+      settled = true;
+      clearTimeout(timeoutId);
+      if (error) {
+        console.error('[syncKey] upsert failed:', key, error);
+        setSaveErrorPopup({ key });
+      }
+    } catch (err) {
+      settled = true;
+      clearTimeout(timeoutId);
+      console.error('[syncKey] upsert threw:', key, err);
+      setSaveErrorPopup({ key });
+    }
   }, []);
 
-  useEffect(() => { if (appDataLoaded) saveKey('confirmed', confirmed); }, [confirmed, appDataLoaded]);
-  useEffect(() => { if (appDataLoaded) saveKey('temp_selected', [...tempSelected]); }, [tempSelected, appDataLoaded]);
-  useEffect(() => { if (appDataLoaded) saveKey('skn_confirmed_snap', sknConfirmedSnap); }, [sknConfirmedSnap, appDataLoaded]);
-  useEffect(() => { if (appDataLoaded) saveKey('updated_dates', updatedDates); }, [updatedDates, appDataLoaded]);
-  useEffect(() => { if (appDataLoaded) saveKey('pre_edit_snap', preEditSnap); }, [preEditSnap, appDataLoaded]);
-  useEffect(() => { if (appDataLoaded) saveKey('last_skn_confirmed', lastSKNConfirmed); }, [lastSKNConfirmed, appDataLoaded]);
+  // 같은 키에 대해 짧은 시간 안에 연달아 일어나는 변경(예: 타이핑)을 하나로 묶어서
+  // 매 키 입력마다 서버 왕복이 일어나지 않도록 한다.
+  const syncTimers = useRef({});
+  const scheduleSyncKey = useCallback((key, localValue, setLocal) => {
+    // 로그인 직후 로드된 값이 그대로 state에 세팅되면서 각 useEffect가 다시 한 번 도는데,
+    // 이때는 실제로 바뀐 게 없으니 매번 24개 키를 전부 읽고-다시-쓰는 불필요한 요청을
+    // 한꺼번에 쏘지 않도록 건너뛴다. (이 burst 자체가 5초 타임아웃을 유발해
+    // 로그인하자마자 "저장에 실패했습니다" 팝업이 뜨는 원인이었음)
+    if (deepEqual(localValue, lastSyncedRef.current[key])) return;
+    clearTimeout(syncTimers.current[key]);
+    syncTimers.current[key] = setTimeout(() => { syncKey(key, localValue, setLocal); }, 600);
+  }, [syncKey]);
+
+  useEffect(() => { if (appDataLoaded) scheduleSyncKey('confirmed', confirmed, setConfirmed); }, [confirmed, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) scheduleSyncKey('temp_selected', [...tempSelected], (arr)=>setTempSelected(new Set(arr))); }, [tempSelected, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) scheduleSyncKey('skn_confirmed_snap', sknConfirmedSnap, setSknConfirmedSnap); }, [sknConfirmedSnap, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) scheduleSyncKey('updated_dates', updatedDates, setUpdatedDates); }, [updatedDates, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) scheduleSyncKey('pre_edit_snap', preEditSnap, setPreEditSnap); }, [preEditSnap, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) scheduleSyncKey('last_skn_confirmed', lastSKNConfirmed, setLastSKNConfirmed); }, [lastSKNConfirmed, appDataLoaded]);
   // last_revision_data: 메모리 전용이므로 DB 저장 없음
-  useEffect(() => { if (appDataLoaded) saveKey('mail_recipients', mailRecipients); }, [mailRecipients, appDataLoaded]);
-  useEffect(() => { if (appDataLoaded) saveKey('skn_recipients', sknRecipients); }, [sknRecipients, appDataLoaded]);
-  useEffect(() => { if (appDataLoaded) saveKey('shipping_groups', shippingGroups); }, [shippingGroups, appDataLoaded]);
-  useEffect(() => { if (appDataLoaded) saveKey('hq_items', hqItems); }, [hqItems, appDataLoaded]);
-  useEffect(() => { if (appDataLoaded) saveKey('store_list', storeList); }, [storeList, appDataLoaded]);
-  useEffect(() => { if (appDataLoaded) saveKey('shipping_table1', shippingTable1); }, [shippingTable1, appDataLoaded]);
-  useEffect(() => { if (appDataLoaded) saveKey('shipping_step', shippingStep); }, [shippingStep, appDataLoaded]);
-  useEffect(() => { if (appDataLoaded) saveKey('shipping_custom_cols', shippingCustomCols); }, [shippingCustomCols, appDataLoaded]);
-  useEffect(() => { if (appDataLoaded) saveKey('shipping_next_col_id', shippingNextColId); }, [shippingNextColId, appDataLoaded]);
-  useEffect(() => { if (appDataLoaded) saveKey('gtm_widecolor_data', gtmWideColorData); }, [gtmWideColorData, appDataLoaded]);
-  useEffect(() => { if (appDataLoaded) saveKey('gtm_hanging_data', gtmHangingData); }, [gtmHangingData, appDataLoaded]);
-  useEffect(() => { if (appDataLoaded) saveKey('gtm_submissions', gtmSubmissions); }, [gtmSubmissions, appDataLoaded]);
-  useEffect(() => { if (appDataLoaded) saveKey('gtm_new_store_list', gtmNewStoreList); }, [gtmNewStoreList, appDataLoaded]);
-  useEffect(() => { if (appDataLoaded) saveKey('gtm_largegfx_rounds', gtmLargeGfxRounds); }, [gtmLargeGfxRounds, appDataLoaded]);
-  useEffect(() => { if (appDataLoaded) saveKey('gtm_largegfx_draft', gtmLargeGfxDraft); }, [gtmLargeGfxDraft, appDataLoaded]);
-  useEffect(() => { if (appDataLoaded) saveKey('gtm_largegfx_photos', gtmLargeGfxPhotos); }, [gtmLargeGfxPhotos, appDataLoaded]);
-  useEffect(() => { if (appDataLoaded) saveKey('gtm_largegfx_compare', gtmLargeGfxCompareOverrides); }, [gtmLargeGfxCompareOverrides, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) scheduleSyncKey('mail_recipients', mailRecipients, setMailRecipients); }, [mailRecipients, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) scheduleSyncKey('skn_recipients', sknRecipients, setSknRecipients); }, [sknRecipients, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) scheduleSyncKey('shipping_groups', shippingGroups, setShippingGroups); }, [shippingGroups, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) scheduleSyncKey('hq_items', hqItems, setHqItems); }, [hqItems, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) scheduleSyncKey('store_list', storeList, setStoreList); }, [storeList, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) scheduleSyncKey('shipping_table1', shippingTable1, setShippingTable1); }, [shippingTable1, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) scheduleSyncKey('shipping_step', shippingStep, setShippingStep); }, [shippingStep, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) scheduleSyncKey('shipping_custom_cols', shippingCustomCols, setShippingCustomCols); }, [shippingCustomCols, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) scheduleSyncKey('shipping_next_col_id', shippingNextColId, setShippingNextColId); }, [shippingNextColId, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) scheduleSyncKey('gtm_widecolor_data', gtmWideColorData, setGtmWideColorData); }, [gtmWideColorData, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) scheduleSyncKey('gtm_hanging_data', gtmHangingData, setGtmHangingData); }, [gtmHangingData, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) scheduleSyncKey('gtm_submissions', gtmSubmissions, setGtmSubmissions); }, [gtmSubmissions, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) scheduleSyncKey('gtm_new_store_list', gtmNewStoreList, setGtmNewStoreList); }, [gtmNewStoreList, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) scheduleSyncKey('gtm_largegfx_rounds', gtmLargeGfxRounds, setGtmLargeGfxRounds); }, [gtmLargeGfxRounds, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) scheduleSyncKey('gtm_largegfx_draft', gtmLargeGfxDraft, setGtmLargeGfxDraft); }, [gtmLargeGfxDraft, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) scheduleSyncKey('gtm_largegfx_photos', gtmLargeGfxPhotos, setGtmLargeGfxPhotos); }, [gtmLargeGfxPhotos, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) scheduleSyncKey('gtm_largegfx_compare', gtmLargeGfxCompareOverrides, setGtmLargeGfxCompareOverrides); }, [gtmLargeGfxCompareOverrides, appDataLoaded]);
 
   // 예전에 base64로 hq_items JSON에 통째로 박혀있던 시안 이미지를 Storage로 옮기고 URL만 남긴다 (1회성, admin만).
   const sianMigratedRef = useRef(false);
@@ -522,6 +643,20 @@ export default function App() {
             <div style={styles2.popupTitle}>배송일 컨펌이 완료되었습니다</div>
             <div style={styles2.popupSub}>확정된 배송일이 빨간 원으로 표시됩니다.</div>
             <button style={styles2.popupBtn} onClick={()=>setShowConfirmPopup(false)}>확인</button>
+          </div>
+        </div>
+      )}
+      {saveErrorPopup && (
+        <div style={styles2.popupOverlay}>
+          <div style={styles2.popupBox}>
+            <div style={styles2.popupIcon}>⚠️</div>
+            <div style={styles2.popupTitle}>저장에 실패했습니다</div>
+            <div style={styles2.popupSub}>
+              방금 수행하신 작업이 서버에 정상적으로 저장되지 않았습니다.<br/>
+              네트워크 상태를 확인한 후 다시 시도해 주세요.<br/>
+              계속 반복되면 새로고침 후 다시 로그인해 주세요.
+            </div>
+            <button style={styles2.popupBtn} onClick={()=>setSaveErrorPopup(null)}>확인</button>
           </div>
         </div>
       )}
@@ -1672,12 +1807,12 @@ function SchedulePage({ role, confirmed, setConfirmed, tempSelected, setTempSele
               <tr>
                 <th style={styles.th}>날짜</th>
                 <th style={styles.th}>요일</th>
-                <th style={{...styles.th,flex:2}}>비고</th>
+                {isAdmin && <th style={{...styles.th,flex:2}}>비고</th>}
               </tr>
             </thead>
             <tbody>
               {monthConfirmed.length === 0 && (
-                <tr><td colSpan={3} style={{...styles.td,textAlign:"center",color:"#aaa"}}>확정된 배송일 없음</td></tr>
+                <tr><td colSpan={isAdmin?3:2} style={{...styles.td,textAlign:"center",color:"#aaa"}}>확정된 배송일 없음</td></tr>
               )}
               {monthConfirmed.map(([k,v])=>{
                 const [,m,d] = k.split("-");
@@ -1708,13 +1843,12 @@ function SchedulePage({ role, confirmed, setConfirmed, tempSelected, setTempSele
                       </div>
                     </td>
                     <td style={{...styles.td,fontWeight:700,color:"#ff6b35"}}>{v.dow}</td>
-                    <td style={{...styles.td,flex:2}}>
-                      {isAdmin
-                        ? <input style={styles.noteInput} value={v.note} placeholder="비고 입력"
-                            onChange={e=>setConfirmed(prev=>({...prev,[k]:{...prev[k],note:e.target.value}}))} />
-                        : <span>{v.note||"-"}</span>
-                      }
-                    </td>
+                    {isAdmin && (
+                      <td style={{...styles.td,flex:2}}>
+                        <input style={styles.noteInput} value={v.note} placeholder="비고 입력"
+                          onChange={e=>setConfirmed(prev=>({...prev,[k]:{...prev[k],note:e.target.value}}))} />
+                      </td>
+                    )}
                   </tr>
                 );
               })}
@@ -4265,6 +4399,8 @@ const GTM_TABS = [
 const GTM_REGIONS = ["수도권","부산","대구","서부","제주","중부","유통사업부"];
 // 와이드컬러 업로드 시 "어느 소속인가요?" 선택지 (제주 제외, 유통사업부 포함)
 const WIDECOLOR_UPLOAD_SCOPES = ["수도권","부산","대구","서부","중부","유통사업부"];
+// 와이드컬러 "단면/양면" 값 드롭다운 선택지
+const SIDE_TYPE_OPTIONS = ["단면형","양면형","단면형/양면형"];
 const GTM_TEAM_TO_REGION = {
   "대전마케팅팀":"중부", "서대구마케팅팀":"대구", "서부소매사업팀":"서부",
   "서광주마케팅팀":"서부", "동대구마케팅팀":"대구", "남부마케팅팀":"수도권",
@@ -4452,6 +4588,34 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
     return null;
   };
 
+  // "어느 소속입니까?" 선택(uploadRegion)과 목록 필터(hqFilter)를 서로 연동한다.
+  // isStore 변형은 filterOptions.key가 본부명 그대로라 uploadRegion과 직접 일치하지만,
+  // hq 변형은 key가 "구분|본부" 형태라 resolveRowScope로 소속 문자열을 뽑아 매칭해야 한다.
+  const deriveFilterKeyFromScope = (scope) => {
+    if (!scope) return "전체";
+    if (isStore) return scope;
+    const match = filterOptions.find(o => {
+      const [gu, hq] = o.key.includes("|") ? o.key.split("|") : [o.key, ""];
+      return resolveRowScope(gu, hq) === scope;
+    });
+    return match ? match.key : "전체";
+  };
+  const deriveScopeFromFilterKey = (key) => {
+    if (!key || key === "전체") return "";
+    if (isStore) return WIDECOLOR_UPLOAD_SCOPES.includes(key) ? key : "";
+    const [gu, hq] = key.includes("|") ? key.split("|") : [key, ""];
+    const scope = resolveRowScope(gu, hq);
+    return scope && WIDECOLOR_UPLOAD_SCOPES.includes(scope) ? scope : "";
+  };
+  const handleUploadRegionChange = (val) => {
+    setUploadRegion(val);
+    setHqFilter(deriveFilterKeyFromScope(val));
+  };
+  const handleHqFilterChange = (val) => {
+    setHqFilter(val);
+    if (!isAdmin) setUploadRegion(deriveScopeFromFilterKey(val));
+  };
+
   const handleUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -4497,6 +4661,7 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
           fileHqRegions = new Set(dataRows.map(r => rowHq(r)).filter(Boolean));
           parsed = dataRows.map((r,i) => {
             const qty = get(r, qtyCol, 10);
+            const qtyNum = (qty!==undefined && qty!==null && qty!=="") ? Number(qty)||0 : "";
             return {
               id: Date.now()+i,
               구분: get(r, guCol, 0),
@@ -4510,8 +4675,8 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
               주소: get(r, addressCol, 7),
               단면양면: get(r, sideCol, 8),
               슬롯: get(r, slotCol, 9),
-              이전수량: qty,
-              신규수량: (qty!==undefined && qty!==null && qty!=="") ? qty : "", // 이전 수량을 기본값으로 채움 (수정 가능)
+              이전수량: qtyNum,
+              신규수량: qtyNum, // 이전 수량을 기본값으로 채움 (수정 가능)
             };
           });
         } else {
@@ -4520,13 +4685,13 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
           let lastGroup = "";
           parsed = dataRows.map((r,i) => {
             if (r[0]!=null && String(r[0]).trim()!=="") lastGroup = String(r[0]).trim();
-            const 이전수량 = r[2];
+            const 이전수량 = (r[2]!==undefined && r[2]!==null && r[2]!=="") ? Number(r[2])||0 : "";
             return {
               id: i+1,
               구분: lastGroup,
               본부: r[1],
               이전수량,
-              신규수량: (이전수량!==undefined && 이전수량!==null && 이전수량!=="") ? 이전수량 : "",
+              신규수량: 이전수량,
             };
           });
         }
@@ -4615,8 +4780,13 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
     e.target.value="";
   };
 
+  // 이전수량/신규수량은 반드시 숫자로 저장해야 한다. <input type="number">라도
+  // onChange의 e.target.value는 항상 문자열이라, 그대로 저장하면 이 행만 문자열 타입이 되고
+  // 엑셀로 내보낼 때 숫자로 인식되지 않아 SUM이 깨진다(직접 입력/수정한 매장에서만 발생).
+  const NUMERIC_FIELDS = new Set(["이전수량","신규수량"]);
   const updateRow = (id, field, val) => {
-    setData(prev => prev.map(r => r.id===id ? {...r, [field]:val} : r));
+    const coerced = NUMERIC_FIELDS.has(field) ? (val === "" ? "" : Number(val)) : val;
+    setData(prev => prev.map(r => r.id===id ? {...r, [field]:coerced} : r));
   };
   const deleteRow = (id) => {
     setData(prev => prev.filter(r => r.id!==id));
@@ -4636,7 +4806,7 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
         대리점코드: fields.대리점코드||"", 대리점명: fields.대리점명||"",
         매장코드: fields.매장코드||"", 매장명: fields.매장명||"", 주소: fields.주소||"",
         단면양면: fields.단면양면||"", 슬롯: fields.슬롯||"",
-        이전수량: 0, 신규수량: fields.신청수량 ?? "",
+        이전수량: 0, 신규수량: (fields.신청수량!==undefined && fields.신청수량!=="") ? Number(fields.신청수량) : "",
       }];
     });
   };
@@ -4645,9 +4815,11 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
     const header = isStore
       ? ["구분","본부","마케팅팀","대리점코드","대리점명","매장코드","매장명","주소","단면형/양면형","도광판슬롯","이전수량","신규수량"]
       : ["구분","본부","이전수량","신규수량"];
+    // 이전 버전에서 문자열로 저장된 수량이 남아있을 수 있어, 내보낼 때 항상 숫자로 강제 변환한다.
+    // (문자열 "1"을 그대로 내보내면 엑셀에서 텍스트로 인식되어 SUM에 포함되지 않는다.)
     const body = isStore
-      ? data.map(r=>[r.구분,r.본부,r.마케팅팀,r.대리점코드,r.대리점명,r.매장코드,r.매장명,r.주소,r.단면양면,r.슬롯,r.이전수량,r.신규수량||0])
-      : data.map(r=>[r.구분,r.본부,r.이전수량,r.신규수량||0]);
+      ? data.map(r=>[r.구분,r.본부,r.마케팅팀,r.대리점코드,r.대리점명,r.매장코드,r.매장명,r.주소,r.단면양면,r.슬롯,Number(r.이전수량)||0,Number(r.신규수량)||0])
+      : data.map(r=>[r.구분,r.본부,Number(r.이전수량)||0,Number(r.신규수량)||0]);
     const ws = XLSX.utils.aoa_to_sheet([header, ...body]);
     ws["!cols"] = (isStore ? [8,8,12,10,10,12,14,24,10,8,8,8] : [10,8,10,10]).map(w=>({wch:w}));
     const wb = XLSX.utils.book_new();
@@ -4682,8 +4854,8 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
               구분:r[0], 본부, 마케팅팀:r[2],
               대리점코드:String(r[3]||"").trim(), 대리점명:r[4],
               매장코드:code, 매장명:r[6], 주소:r[7],
-              단면양면:r[8], 슬롯:r[9], 이전수량:r[10],
-              신규수량: (r[11]!==undefined && r[11]!==null && r[11]!=="") ? r[11] : r[10], // 수량 열이 비어있으면 이전수량을 그대로 사용
+              단면양면:r[8], 슬롯:r[9], 이전수량: Number(r[10])||0,
+              신규수량: (r[11]!==undefined && r[11]!==null && r[11]!=="") ? Number(r[11])||0 : Number(r[10])||0, // 수량 열이 비어있으면 이전수량을 그대로 사용
             });
           });
           // 업로드 파일에 포함된 본부(들)는 기존 pool을 통째로 비우고 이 파일 내용으로만 다시 채움
@@ -4777,11 +4949,18 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
   const scopeLabel = submissionScope === "missing" ? "누락 매장" : "전체 목록";
   const submission = hqFilter!=="전체" ? (submissions[submissionScope]||{})[hqFilter] : null;
   const isSubmitted = !!submission?.submitted;
-  const inputsLocked = isSubmitted && !isAdmin;
+  const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
+
+  // 행 단위 잠금: 화면에 "전체"를 보고 있어도, 그 행이 속한 본부가 이미 제출된 상태라면
+  // (관리자가 아닌 이상) 수정할 수 없어야 한다. hqFilter로만 판단하면 필터를 "전체"로 바꿨을 때
+  // 이미 제출된 본부의 값도 다시 수정 가능해지는 문제가 있었다.
+  const rowScopeOf = (row) => isStore ? row.본부 : (resolveRowScope(row.구분, row.본부) || row.본부);
+  const isRowLocked = (row) => !isAdmin && !!(submissions[submissionScope]||{})[rowScopeOf(row)]?.submitted;
 
   const handleSubmit = () => {
     if (hqFilter === "전체") return;
     setSubmissions(prev => ({ ...prev, [submissionScope]: { ...(prev[submissionScope]||{}), [hqFilter]: { submitted:true, submittedAt:new Date().toISOString() } } }));
+    setShowSubmitConfirm(false);
   };
   const handleCancelSubmit = () => {
     if (hqFilter === "전체") return;
@@ -4845,7 +5024,7 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
         </div>
         <div style={{display:"flex", gap:8, alignItems:"center", flexWrap:"wrap"}}>
           {!isAdmin && (
-            <select value={uploadRegion} onChange={e=>setUploadRegion(e.target.value)}
+            <select value={uploadRegion} onChange={e=>handleUploadRegionChange(e.target.value)}
               style={{padding:"7px 12px", borderRadius:8, border:"1px solid #ddd",
                 fontSize:12.5, fontWeight:600, color: uploadRegion?"#444":"#c00", background:"#fff", cursor:"pointer"}}>
               <option value="">어느 본부 소속인가요?</option>
@@ -4916,7 +5095,7 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
               </button>
             )}
             {filterOptions.length > 0 && (
-              <select value={hqFilter} onChange={e=>setHqFilter(e.target.value)}
+              <select value={hqFilter} onChange={e=>handleHqFilterChange(e.target.value)}
                 style={{marginLeft:"auto", padding:"7px 14px", borderRadius:8, border:"1px solid #ddd",
                   fontSize:12.5, fontWeight:600, color:"#444", background:"#fff", cursor:"pointer"}}>
                 <option value="전체">전체 ({filterCountSource.length})</option>
@@ -4934,7 +5113,7 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
                   </span>
                 )}
                 <button
-                  onClick={handleSubmit}
+                  onClick={()=>setShowSubmitConfirm(true)}
                   disabled={isSubmitted}
                   style={{...settingsBtn(isSubmitted?"#bbb":"#e8420a"), padding:"7px 18px", fontSize:12.5,
                     cursor:isSubmitted?"default":"pointer"}}>
@@ -4982,7 +5161,9 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredData.map((row,i)=>(
+                    {filteredData.map((row,i)=>{
+                      const locked = isRowLocked(row);
+                      return (
                       <tr key={row.id} style={{background:i%2===0?"#fafafa":"#fff"}}>
                         {isStore ? (
                           <>
@@ -4991,21 +5172,35 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
                             <td style={{...tD, textAlign:"center", fontSize:11, color:"#666"}}>{row.매장코드}</td>
                             <td style={{...tD, fontWeight:600}}>{row.매장명}</td>
                             <td style={{...tD, textAlign:"center"}}>
-                              <input
-                                type="text"
-                                disabled={inputsLocked}
-                                value={row.단면양면||""}
-                                onChange={e=>updateRow(row.id,"단면양면",e.target.value)}
-                                style={{...numInput, width:56, textAlign:"center", opacity: inputsLocked?0.6:1}}
-                              />
+                              {(() => {
+                                // 드롭다운으로 바뀌기 전에 자유 텍스트로 입력되어 오타(예: "단면혀")가 저장된
+                                // 행이 있을 수 있다. 그런 값을 목록에 없다고 조용히 지워버리면 안 되므로,
+                                // 임시 옵션으로 보여주고 빨간 테두리로 눈에 띄게 표시해 수정을 유도한다.
+                                const isInvalid = row.단면양면 && !SIDE_TYPE_OPTIONS.includes(row.단면양면);
+                                return (
+                                  <select
+                                    disabled={locked}
+                                    value={row.단면양면||""}
+                                    onChange={e=>updateRow(row.id,"단면양면",e.target.value)}
+                                    title={isInvalid ? `"${row.단면양면}"은(는) 올바른 값이 아닙니다. 다시 선택해주세요.` : undefined}
+                                    style={{...numInput, width:100, textAlign:"center", opacity: locked?0.6:1,
+                                      cursor: locked?"not-allowed":"pointer",
+                                      ...(isInvalid ? { border:"1px solid #c00", background:"#fff0f0" } : {})}}
+                                  >
+                                    <option value="">선택</option>
+                                    {SIDE_TYPE_OPTIONS.map(opt=>(<option key={opt} value={opt}>{opt}</option>))}
+                                    {isInvalid && <option value={row.단면양면}>⚠ {row.단면양면}</option>}
+                                  </select>
+                                );
+                              })()}
                             </td>
                             <td style={{...tD, textAlign:"center"}}>
                               <input
                                 type="text"
-                                disabled={inputsLocked}
+                                disabled={locked}
                                 value={row.슬롯||""}
                                 onChange={e=>updateRow(row.id,"슬롯",e.target.value)}
-                                style={{...numInput, width:56, textAlign:"center", opacity: inputsLocked?0.6:1}}
+                                style={{...numInput, width:56, textAlign:"center", opacity: locked?0.6:1}}
                               />
                             </td>
                           </>
@@ -5018,33 +5213,34 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
                         <td style={{...tD, textAlign:"center", background:"#f0f7ff"}}>
                           <input
                             type="number" min="0"
-                            disabled={inputsLocked}
+                            disabled={locked}
                             value={row.이전수량 ?? ""}
                             onChange={e=>updateRow(row.id,"이전수량",e.target.value)}
-                            style={{...numInput, width:60, textAlign:"center", fontWeight:700, color:"#1d6fa4", opacity: inputsLocked?0.6:1}}
+                            style={{...numInput, width:60, textAlign:"center", fontWeight:700, color:"#1d6fa4", opacity: locked?0.6:1}}
                           />
                         </td>
                         <td style={{...tD, textAlign:"center", background:"#f0fff4"}}>
                           <input
                             type="number" min="0"
-                            disabled={inputsLocked}
+                            disabled={locked}
                             style={{...numInput, width:70, fontWeight:700,
                               color: row.신규수량!==""?"#2e8b57":"#aaa",
                               borderColor: row.신규수량!==""?"#2e8b57":"#ddd",
-                              opacity: inputsLocked?0.6:1, cursor: inputsLocked?"not-allowed":"text"}}
+                              opacity: locked?0.6:1, cursor: locked?"not-allowed":"text"}}
                             value={row.신규수량}
                             placeholder={String(row.이전수량||0)}
                             onChange={e=>updateRow(row.id,"신규수량",e.target.value)}
                           />
                         </td>
                         <td style={{...tD, textAlign:"center"}}>
-                          <button onClick={()=>deleteRow(row.id)} disabled={inputsLocked}
+                          <button onClick={()=>deleteRow(row.id)} disabled={locked}
                             style={{width:24, height:24, borderRadius:"50%", border:"none",
-                              background: inputsLocked?"#ccc":"#c00",
-                              color:"#fff", fontSize:13, fontWeight:800, cursor: inputsLocked?"not-allowed":"pointer", lineHeight:1}}>×</button>
+                              background: locked?"#ccc":"#c00",
+                              color:"#fff", fontSize:13, fontWeight:800, cursor: locked?"not-allowed":"pointer", lineHeight:1}}>×</button>
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                     {/* 합계 행 */}
                     <tr style={{background:"#e8f0fb", fontWeight:700}}>
                       <td colSpan={isStore?6:2} style={{...tD, textAlign:"right", color:"#555"}}>합 계</td>
@@ -5112,16 +5308,18 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
                         </tr>
                       </thead>
                       <tbody>
-                        {filteredMissingStores.map((s,i)=>(
+                        {filteredMissingStores.map((s,i)=>{
+                          const locked = isRowLocked(s);
+                          return (
                           <tr key={s.id ?? s.매장코드+i} style={{background:i%2===0?"#fafafa":"#fff"}}>
                             <td style={{...tD, textAlign:"center", color:"#aaa"}}>{i+1}</td>
                             <td style={{...tD, textAlign:"center"}}>{s.본부||"-"}</td>
                             <td style={{...tD, fontSize:11, color:"#666"}}>{s.매장코드}</td>
                             <td style={{...tD, fontWeight:600}}>{s.매장명||s.매장코드}</td>
                             <td style={{...tD, textAlign:"center"}}>
-                              <label style={{display:"flex", alignItems:"center", justifyContent:"center", gap:6, cursor: inputsLocked?"not-allowed":"pointer"}}>
+                              <label style={{display:"flex", alignItems:"center", justifyContent:"center", gap:6, cursor: locked?"not-allowed":"pointer"}}>
                                 <input type="checkbox"
-                                  disabled={inputsLocked}
+                                  disabled={locked}
                                   checked={!!s.확인여부}
                                   onChange={e=>updateNewStore(s.id,"확인여부",e.target.checked)}
                                   style={{width:16,height:16,accentColor:"#e85d26"}} />
@@ -5131,25 +5329,26 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
                               </label>
                             </td>
                             <td style={tD}>
-                              <input style={{...numInput, width:"100%", textAlign:"left", opacity: inputsLocked?0.6:1}}
-                                disabled={inputsLocked}
+                              <input style={{...numInput, width:"100%", textAlign:"left", opacity: locked?0.6:1}}
+                                disabled={locked}
                                 value={s.비고||""} placeholder="비고 입력"
                                 onChange={e=>updateNewStore(s.id,"비고",e.target.value)} />
                             </td>
                             <td style={{...tD, textAlign:"center"}}>
                               <button
                                 title="매장리스트에 추가"
-                                disabled={inputsLocked}
+                                disabled={locked}
                                 onClick={()=>addStoreRow({ 구분:s.구분, 본부:s.본부, 대리점코드:s.대리점코드, 대리점명:s.대리점명, 매장코드:s.매장코드, 매장명:s.매장명 })}
                                 style={{width:26, height:26, borderRadius:"50%", border:"none",
-                                  background: inputsLocked?"#bbb":"#2e8b57",
-                                  color:"#fff", fontSize:15, fontWeight:800, lineHeight:1, cursor: inputsLocked?"not-allowed":"pointer",
+                                  background: locked?"#bbb":"#2e8b57",
+                                  color:"#fff", fontSize:15, fontWeight:800, lineHeight:1, cursor: locked?"not-allowed":"pointer",
                                   display:"inline-flex", alignItems:"center", justifyContent:"center", padding:0}}>
                                 +
                               </button>
                             </td>
                           </tr>
-                        ))}
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -5170,12 +5369,23 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
             ].map(([field,label])=>(
               <div key={field} style={{display:"flex", flexDirection:"column", gap:4}}>
                 <label style={{fontSize:11.5, color:"#888", fontWeight:600}}>{label}</label>
-                <input
-                  type={field==="신청수량"?"number":"text"}
-                  value={addStoreForm[field]}
-                  onChange={e=>setAddStoreForm(prev=>({...prev,[field]:e.target.value}))}
-                  style={{...numInput, width:"100%", textAlign:"left"}}
-                />
+                {field==="단면양면" ? (
+                  <select
+                    value={addStoreForm[field]}
+                    onChange={e=>setAddStoreForm(prev=>({...prev,[field]:e.target.value}))}
+                    style={{...numInput, width:"100%", textAlign:"left", cursor:"pointer"}}
+                  >
+                    <option value="">선택</option>
+                    {SIDE_TYPE_OPTIONS.map(opt=>(<option key={opt} value={opt}>{opt}</option>))}
+                  </select>
+                ) : (
+                  <input
+                    type={field==="신청수량"?"number":"text"}
+                    value={addStoreForm[field]}
+                    onChange={e=>setAddStoreForm(prev=>({...prev,[field]:e.target.value}))}
+                    style={{...numInput, width:"100%", textAlign:"left"}}
+                  />
+                )}
               </div>
             ))}
             <div style={{display:"flex", gap:10, marginTop:8}}>
@@ -5187,6 +5397,25 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
                   addStoreRow(addStoreForm);
                   setShowAddStore(false);
                 }}>추가</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showSubmitConfirm && (
+        <div style={styles2.popupOverlay}>
+          <div style={styles2.popupBox}>
+            <div style={styles2.popupIcon}>⚠️</div>
+            <div style={styles2.popupTitle}>제출하시겠습니까?</div>
+            <div style={styles2.popupSub}>
+              제출하실 경우 수정이 불가합니다.<br/>
+              변경을 원하실 경우, SK텔레콤 본사 담당자에게 문의하세요.
+            </div>
+            <div style={{display:"flex", gap:10, marginTop:8}}>
+              <button style={{...styles2.popupBtn, marginTop:0, background:"#aaa", color:"#333"}}
+                onClick={()=>setShowSubmitConfirm(false)}>취소</button>
+              <button style={{...styles2.popupBtn, marginTop:0}}
+                onClick={handleSubmit}>제출</button>
             </div>
           </div>
         </div>
