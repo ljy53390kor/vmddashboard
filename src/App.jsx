@@ -4961,7 +4961,14 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
   // 행 단위 잠금: 화면에 "전체"를 보고 있어도, 그 행이 속한 본부가 이미 제출된 상태라면
   // (관리자가 아닌 이상) 수정할 수 없어야 한다. hqFilter로만 판단하면 필터를 "전체"로 바꿨을 때
   // 이미 제출된 본부의 값도 다시 수정 가능해지는 문제가 있었다.
-  const rowScopeOf = (row) => isStore ? row.본부 : (resolveRowScope(row.구분, row.본부) || row.본부);
+  // 제출은 항상 filterOptions의 key(hqFilter 값) 기준으로 저장되므로, 잠금 판단도 반드시
+  // 같은 key 공간을 써야 한다. hq 변형은 key가 "구분|본부" 형태라 resolveRowScope 결과(예: "수도권")
+  // 와 다르게 생겨서, 그 값으로 조회하면 저장된 제출 기록을 절대 찾지 못해 잠금이 전혀 안 걸렸었다.
+  const rowScopeOf = (row) => {
+    const opt = filterOptions.find(o => o.predicate(row));
+    if (opt) return opt.key;
+    return isStore ? row.본부 : (resolveRowScope(row.구분, row.본부) || row.본부);
+  };
   const isRowLocked = (row) => !isAdmin && !!unifiedSubmissions[rowScopeOf(row)]?.submitted;
 
   // 제출하려는 본부의 누락 매장이 하나라도 "확인" 안 됐으면 제출할 수 없다.
