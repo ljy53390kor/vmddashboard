@@ -130,7 +130,7 @@ const playgroundAuth = {
 const playgroundMembers = {
   fetchProfile: async (userId) => {
     if (cachedProfile && cachedProfile.id === userId) {
-      return { data: { employee_id: cachedProfile.id, role: cachedProfile.role, name: cachedProfile.name } };
+      return { data: { employee_id: cachedProfile.id, role: cachedProfile.role, name: cachedProfile.name, region: cachedProfile.region || null } };
     }
     return { data: null };
   },

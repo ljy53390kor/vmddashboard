@@ -318,6 +318,8 @@ export default function App() {
   // ── GTM 취합 ────────────────────────────────────────────────────────────
   const [gtmWideColorData, setGtmWideColorData] = useState([]);
   const [gtmHangingData, setGtmHangingData] = useState([]);
+  const [gtmFisoData, setGtmFisoData] = useState([]);
+  const [gtmA3Data, setGtmA3Data] = useState([]);
   // 본부별 제출 현황: { widecolor: { [본부]: {submitted, submittedAt} }, hanging: {...} }
   const [gtmSubmissions, setGtmSubmissions] = useState({});
   // 와이드컬러 누락 매장 비교용 — 신설 매장 리스트 (전체 매장리스트가 아님)
@@ -355,7 +357,7 @@ export default function App() {
 
   const fetchProfile = async (userId) => {
     const { data } = await dataClient.members.fetchProfile(userId);
-    if (data) setUser({ id: data.employee_id, role: data.role, name: data.name });
+    if (data) setUser({ id: data.employee_id, role: data.role, name: data.name, region: data.region || null });
     setAuthLoading(false);
   };
 
@@ -396,6 +398,8 @@ export default function App() {
         if (m.shipping_next_col_id !== undefined) { setShippingNextColId(m.shipping_next_col_id); synced.shipping_next_col_id = m.shipping_next_col_id; }
         if (m.gtm_widecolor_data)   { setGtmWideColorData(m.gtm_widecolor_data); synced.gtm_widecolor_data = m.gtm_widecolor_data; }
         if (m.gtm_hanging_data)     { setGtmHangingData(m.gtm_hanging_data); synced.gtm_hanging_data = m.gtm_hanging_data; }
+        if (m.gtm_fiso_data)        { setGtmFisoData(m.gtm_fiso_data); synced.gtm_fiso_data = m.gtm_fiso_data; }
+        if (m.gtm_a3_data)          { setGtmA3Data(m.gtm_a3_data); synced.gtm_a3_data = m.gtm_a3_data; }
         if (m.gtm_submissions)      { setGtmSubmissions(m.gtm_submissions); synced.gtm_submissions = m.gtm_submissions; }
         if (m.gtm_new_store_list)   { setGtmNewStoreList(m.gtm_new_store_list); synced.gtm_new_store_list = m.gtm_new_store_list; }
         // gtm_largegfx_rounds/draft는 예전 버전(객체 형태)으로 저장된 값이 남아있을 수 있어 배열인 경우만 반영
@@ -487,6 +491,8 @@ export default function App() {
   useEffect(() => { if (appDataLoaded) scheduleSyncKey('shipping_next_col_id', shippingNextColId, setShippingNextColId); }, [shippingNextColId, appDataLoaded]);
   useEffect(() => { if (appDataLoaded) scheduleSyncKey('gtm_widecolor_data', gtmWideColorData, setGtmWideColorData); }, [gtmWideColorData, appDataLoaded]);
   useEffect(() => { if (appDataLoaded) scheduleSyncKey('gtm_hanging_data', gtmHangingData, setGtmHangingData); }, [gtmHangingData, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) scheduleSyncKey('gtm_fiso_data', gtmFisoData, setGtmFisoData); }, [gtmFisoData, appDataLoaded]);
+  useEffect(() => { if (appDataLoaded) scheduleSyncKey('gtm_a3_data', gtmA3Data, setGtmA3Data); }, [gtmA3Data, appDataLoaded]);
   useEffect(() => { if (appDataLoaded) scheduleSyncKey('gtm_submissions', gtmSubmissions, setGtmSubmissions); }, [gtmSubmissions, appDataLoaded]);
   useEffect(() => { if (appDataLoaded) scheduleSyncKey('gtm_new_store_list', gtmNewStoreList, setGtmNewStoreList); }, [gtmNewStoreList, appDataLoaded]);
   useEffect(() => { if (appDataLoaded) scheduleSyncKey('gtm_largegfx_rounds', gtmLargeGfxRounds, setGtmLargeGfxRounds); }, [gtmLargeGfxRounds, appDataLoaded]);
@@ -558,6 +564,10 @@ export default function App() {
         setGtmWideColorData={setGtmWideColorData}
         gtmHangingData={gtmHangingData}
         setGtmHangingData={setGtmHangingData}
+        gtmFisoData={gtmFisoData}
+        setGtmFisoData={setGtmFisoData}
+        gtmA3Data={gtmA3Data}
+        setGtmA3Data={setGtmA3Data}
         gtmSubmissions={gtmSubmissions}
         setGtmSubmissions={setGtmSubmissions}
         gtmNewStoreList={gtmNewStoreList}
@@ -860,9 +870,10 @@ const authStyles = {
 };
 
 // ─── 대쉬보드 ───────────────────────────────────────────────────────────
-function Dashboard({ user, onLogout, theme, onToggleTheme, confirmed, setConfirmed, tempSelected, setTempSelected, onSKConfirm, sknConfirmedSnap, mailRecipients, setMailRecipients, sknRecipients, setSknRecipients, showMailPopup, setShowMailPopup, shippingGroups, setShippingGroups, hqItems, setHqItems, gtmWideColorData, setGtmWideColorData, gtmHangingData, setGtmHangingData, gtmSubmissions, setGtmSubmissions, gtmNewStoreList, setGtmNewStoreList, gtmLargeGfxRounds, setGtmLargeGfxRounds, gtmLargeGfxDraft, setGtmLargeGfxDraft, gtmLargeGfxPhotos, setGtmLargeGfxPhotos, gtmLargeGfxCompareOverrides, setGtmLargeGfxCompareOverrides, storeList, setStoreList, updatedDates, setUpdatedDates, preEditSnap, setPreEditSnap, lastSKNConfirmed, lastRevisionData, setLastRevisionData, shippingTable1, setShippingTable1, shippingStep, setShippingStep, shippingCustomCols, setShippingCustomCols, shippingNextColId, setShippingNextColId }) {
+function Dashboard({ user, onLogout, theme, onToggleTheme, confirmed, setConfirmed, tempSelected, setTempSelected, onSKConfirm, sknConfirmedSnap, mailRecipients, setMailRecipients, sknRecipients, setSknRecipients, showMailPopup, setShowMailPopup, shippingGroups, setShippingGroups, hqItems, setHqItems, gtmWideColorData, setGtmWideColorData, gtmHangingData, setGtmHangingData, gtmFisoData, setGtmFisoData, gtmA3Data, setGtmA3Data, gtmSubmissions, setGtmSubmissions, gtmNewStoreList, setGtmNewStoreList, gtmLargeGfxRounds, setGtmLargeGfxRounds, gtmLargeGfxDraft, setGtmLargeGfxDraft, gtmLargeGfxPhotos, setGtmLargeGfxPhotos, gtmLargeGfxCompareOverrides, setGtmLargeGfxCompareOverrides, storeList, setStoreList, updatedDates, setUpdatedDates, preEditSnap, setPreEditSnap, lastSKNConfirmed, lastRevisionData, setLastRevisionData, shippingTable1, setShippingTable1, shippingStep, setShippingStep, shippingCustomCols, setShippingCustomCols, shippingNextColId, setShippingNextColId }) {
   const [menu, setMenu] = useState("schedule");
   const role = user.role;
+  const region = user.region;
   const cfg  = ROLE_CONFIG[role];
 
   // ── 알림 시스템 (Supabase 공유 — 모든 계정에서 동일하게 표시) ──────────────
@@ -1145,6 +1156,10 @@ function Dashboard({ user, onLogout, theme, onToggleTheme, confirmed, setConfirm
               setGtmWideColorData={setGtmWideColorData}
               gtmHangingData={gtmHangingData}
               setGtmHangingData={setGtmHangingData}
+              gtmFisoData={gtmFisoData}
+              setGtmFisoData={setGtmFisoData}
+              gtmA3Data={gtmA3Data}
+              setGtmA3Data={setGtmA3Data}
               gtmSubmissions={gtmSubmissions}
               setGtmSubmissions={setGtmSubmissions}
               gtmNewStoreList={gtmNewStoreList}
@@ -1158,6 +1173,7 @@ function Dashboard({ user, onLogout, theme, onToggleTheme, confirmed, setConfirm
               gtmLargeGfxCompareOverrides={gtmLargeGfxCompareOverrides}
               setGtmLargeGfxCompareOverrides={setGtmLargeGfxCompareOverrides}
               role={role}
+              region={region}
             />
           : <Placeholder label={menus.find(m=>m.id===menu)?.label} />}
       </main>
@@ -4390,7 +4406,8 @@ function DatePickerCell({ value, dates, onChange, fmtDate, confirmed }) {
 const GTM_TABS = [
   { id:"widecolor",  label:"와이드컬러" },
   { id:"hanging",    label:"행잉배너" },
-  { id:"a3acrylic",  label:"A3 아크릴 삽지" },
+  { id:"fiso",       label:"FISO" },
+  { id:"a3acrylic",  label:"A3 삽지" },
   { id:"expdesk",    label:"체험대 백월" },
   { id:"largegfx",   label:"라지그래픽" },
 ];
@@ -4434,7 +4451,7 @@ function normalizeGtmRegion(raw) {
   return guessGtmRegion(s, "") || s || "-";
 }
 
-function GTMPage({ gtmWideColorData, setGtmWideColorData, gtmHangingData, setGtmHangingData, gtmSubmissions, setGtmSubmissions, gtmNewStoreList, setGtmNewStoreList, gtmLargeGfxRounds, setGtmLargeGfxRounds, gtmLargeGfxDraft, setGtmLargeGfxDraft, gtmLargeGfxPhotos, setGtmLargeGfxPhotos, gtmLargeGfxCompareOverrides, setGtmLargeGfxCompareOverrides, role }) {
+function GTMPage({ gtmWideColorData, setGtmWideColorData, gtmHangingData, setGtmHangingData, gtmFisoData, setGtmFisoData, gtmA3Data, setGtmA3Data, gtmSubmissions, setGtmSubmissions, gtmNewStoreList, setGtmNewStoreList, gtmLargeGfxRounds, setGtmLargeGfxRounds, gtmLargeGfxDraft, setGtmLargeGfxDraft, gtmLargeGfxPhotos, setGtmLargeGfxPhotos, gtmLargeGfxCompareOverrides, setGtmLargeGfxCompareOverrides, role, region }) {
   const [activeTab, setActiveTab] = useState("widecolor");
   const isAdmin = role === "admin";
 
@@ -4473,6 +4490,7 @@ function GTMPage({ gtmWideColorData, setGtmWideColorData, gtmHangingData, setGtm
             newStoreList={gtmNewStoreList}
             setNewStoreList={setGtmNewStoreList}
             isAdmin={isAdmin}
+            region={region}
             submissions={gtmSubmissions.widecolor || {}}
             setSubmissions={setSectionSubmissions("widecolor")}
             sectionLabel="와이드컬러"
@@ -4484,9 +4502,34 @@ function GTMPage({ gtmWideColorData, setGtmWideColorData, gtmHangingData, setGtm
             data={gtmHangingData}
             setData={setGtmHangingData}
             isAdmin={isAdmin}
+            region={region}
             submissions={gtmSubmissions.hanging || {}}
             setSubmissions={setSectionSubmissions("hanging")}
             sectionLabel="행잉배너"
+          />
+        : activeTab === "fiso"
+        ? <GTMCollectSection
+            key="fiso"
+            variant="team"
+            data={gtmFisoData}
+            setData={setGtmFisoData}
+            isAdmin={isAdmin}
+            region={region}
+            submissions={gtmSubmissions.fiso || {}}
+            setSubmissions={setSectionSubmissions("fiso")}
+            sectionLabel="FISO"
+          />
+        : activeTab === "a3acrylic"
+        ? <GTMCollectSection
+            key="a3acrylic"
+            variant="team"
+            data={gtmA3Data}
+            setData={setGtmA3Data}
+            isAdmin={isAdmin}
+            region={region}
+            submissions={gtmSubmissions.a3acrylic || {}}
+            setSubmissions={setSectionSubmissions("a3acrylic")}
+            sectionLabel="A3 삽지"
           />
         : activeTab === "largegfx"
         ? <GTMLargeGfx
@@ -4512,7 +4555,7 @@ function GTMPage({ gtmWideColorData, setGtmWideColorData, gtmHangingData, setGtm
   );
 }
 
-function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions, sectionLabel, variant="store", newStoreList, setNewStoreList }) {
+function GTMCollectSection({ data, setData, isAdmin, region, submissions, setSubmissions, sectionLabel, variant="store", newStoreList, setNewStoreList }) {
   const fileRef = useRef(null);
   const reuploadFileRef = useRef(null);
   const newStoreFileRef = useRef(null);
@@ -4523,9 +4566,17 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
   const [newStoreUploadStatus, setNewStoreUploadStatus] = useState(null);
   const [activeSection, setActiveSection] = useState("list"); // "list" | "missing"
   const [hqFilter, setHqFilter] = useState("전체");
+  const [teamFilter, setTeamFilter] = useState("전체");
+  const [searchKeyword, setSearchKeyword] = useState("");
   const [showAddStore, setShowAddStore] = useState(false);
-  const [addStoreForm, setAddStoreForm] = useState({ 구분:"", 본부:"", 대리점코드:"", 대리점명:"", 매장코드:"", 매장명:"", 주소:"", 단면양면:"", 슬롯:"", 신청수량:"" });
+  const [addStoreForm, setAddStoreForm] = useState({ 구분:"", 본부:"", 마케팅팀:"", 대리점코드:"", 대리점명:"", 매장코드:"", 매장명:"", 주소:"", 단면양면:"", 슬롯:"", 신청수량:"" });
   const isStore = variant === "store";
+  const isTeam = variant === "team";
+  // 지역본부 전용 계정(region prop 있음)은 소속을 직접 고를 필요 없이 자기 지역으로 고정된다.
+  const isRegionLocked = !isAdmin && !!region && WIDECOLOR_UPLOAD_SCOPES.includes(region);
+  useEffect(() => {
+    if (isRegionLocked && uploadRegion !== region) setUploadRegion(region);
+  }, [isRegionLocked, region]);
 
   // 예전에 업로드되어 id 필드가 없는 신설 매장 리스트(레거시 데이터)를 한 번만 채워준다.
   // id가 없으면 여러 행이 undefined===undefined로 매칭되어 체크박스 등이 한꺼번에 바뀌는 문제가 생긴다.
@@ -4534,6 +4585,10 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
       setNewStoreList(prev => prev.map((r,i) => r.id == null ? { ...r, id: Date.now()+i } : r));
     }
   }, [isStore, newStoreList, setNewStoreList]);
+
+  // 필터/그룹 단위를 단순 본부 키로 다루는 변형(와이드컬러/FISO/A3삽지)인지 여부.
+  // hq 변형(행잉배너)만 "구분 - 본부" 조합 키를 쓴다.
+  const useSimpleScope = isStore || isTeam;
 
   // 데이터에 있는 매장코드 목록
   const wcCodeSet = new Set(data.map(r => String(r.매장코드||"").trim()));
@@ -4544,8 +4599,19 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
         .map(r => ({ ...r, 본부: normalizeGtmRegion(r.본부) }))
     : [];
 
-  // 필터 옵션: store 변형은 본부 단위, hq 변형은 "구분 - 본부" 단위(단, 유통사업부/PS&M류는 전체 하나로 묶음)
-  const filterOptions = isStore
+  // 취합 데이터의 "소속"은 본부명 하나만으로 판단하지 않고 구분과의 조합으로 판단한다.
+  // 유통사업부는 구분 또는 본부 어느 쪽에 적혀있어도 인정하고, 그 외 지역(수도권/부산/대구/서부/중부)은
+  // 반드시 "구분=지역본부" & "본부=해당 지역" 조합일 때만 그 소속으로 인정한다.
+  const resolveRowScope = (gubun, hq) => {
+    const g = String(gubun||"").trim();
+    const h = String(hq||"").trim();
+    if (g === "유통사업부" || g === "PS&M" || h === "유통사업부") return "유통사업부";
+    if (g === "지역본부") return normalizeGtmRegion(h) || null;
+    return null;
+  };
+
+  // 필터 옵션: store/team 변형은 본부 단위, hq 변형은 "구분 - 본부" 단위(단, 유통사업부/PS&M류는 전체 하나로 묶음)
+  const rawFilterOptions = useSimpleScope
     ? Array.from(new Set(data.map(r=>r.본부).filter(Boolean))).map(hq => ({
         key: hq, label: hq, predicate: row => row.본부 === hq,
       }))
@@ -4571,29 +4637,60 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
         });
         return opts;
       })();
+  // 지역본부 전용 계정은 자기 소속 옵션 하나만 볼 수 있다 (다른 지역 데이터는 아예 노출되지 않음).
+  const filterOptions = isRegionLocked
+    ? rawFilterOptions.filter(o => useSimpleScope
+        ? o.key === region
+        : (() => {
+            const [gu, hq] = o.key.includes("|") ? o.key.split("|") : [o.key, ""];
+            return resolveRowScope(gu, hq) === region;
+          })())
+    : rawFilterOptions;
+  // 지역본부 전용 계정은 필터를 직접 고를 필요 없이 자기 소속 옵션으로 자동 고정된다.
+  const lockedFilterKey = isRegionLocked ? (filterOptions[0]?.key ?? "전체") : null;
+  useEffect(() => {
+    if (isRegionLocked && lockedFilterKey && hqFilter !== lockedFilterKey) setHqFilter(lockedFilterKey);
+  }, [isRegionLocked, lockedFilterKey]);
   const selectedOption = filterOptions.find(o => o.key === hqFilter);
-  const filteredData = hqFilter==="전체" ? data : data.filter(selectedOption ? selectedOption.predicate : ()=>true);
-  const filteredMissingStores = hqFilter==="전체" ? missingStores : missingStores.filter(selectedOption ? selectedOption.predicate : ()=>true);
-  // 필터 드롭다운의 개수 표시는 현재 보고 있는 섹션(전체 목록 vs 누락 매장) 기준이어야 한다.
-  const filterCountSource = (isStore && activeSection === "missing") ? missingStores : data;
-
-  // 취합 데이터의 "소속"은 본부명 하나만으로 판단하지 않고 구분과의 조합으로 판단한다.
-  // 유통사업부는 구분 또는 본부 어느 쪽에 적혀있어도 인정하고, 그 외 지역(수도권/부산/대구/서부/중부)은
-  // 반드시 "구분=지역본부" & "본부=해당 지역" 조합일 때만 그 소속으로 인정한다.
-  const resolveRowScope = (gubun, hq) => {
-    const g = String(gubun||"").trim();
-    const h = String(hq||"").trim();
-    if (g === "유통사업부" || g === "PS&M" || h === "유통사업부") return "유통사업부";
-    if (g === "지역본부") return normalizeGtmRegion(h) || null;
-    return null;
+  // 지역본부 전용 계정은 "전체"를 선택해도 자기 소속으로만 좁혀서 보여준다.
+  const scopedData = isRegionLocked
+    ? data.filter(r => (useSimpleScope ? r.본부 === region : resolveRowScope(r.구분, r.본부) === region))
+    : data;
+  const scopedMissingStores = isRegionLocked
+    ? missingStores.filter(r => r.본부 === region)
+    : missingStores;
+  const hqFilteredData = hqFilter==="전체" ? scopedData : scopedData.filter(selectedOption ? selectedOption.predicate : ()=>true);
+  const hqFilteredMissingStores = hqFilter==="전체" ? scopedMissingStores : scopedMissingStores.filter(selectedOption ? selectedOption.predicate : ()=>true);
+  // 마케팅팀 필터 (와이드컬러/FISO/A3삽지 전용) — 현재 본부 필터 범위 안의 마케팅팀만 옵션으로 제공
+  const teamOptions = (isStore || isTeam)
+    ? Array.from(new Set(hqFilteredData.map(r=>r.마케팅팀).filter(Boolean))).sort()
+    : [];
+  const teamFilteredData = (teamFilter!=="전체" && teamOptions.length>0)
+    ? hqFilteredData.filter(r => r.마케팅팀 === teamFilter)
+    : hqFilteredData;
+  const teamFilteredMissingStores = (teamFilter!=="전체" && teamOptions.length>0)
+    ? hqFilteredMissingStores.filter(r => r.마케팅팀 === teamFilter)
+    : hqFilteredMissingStores;
+  // 키워드 검색 (매장명/매장코드/대리점명/대리점코드/마케팅팀/본부/주소 등에서 부분일치)
+  const matchesKeyword = (row) => {
+    const kw = searchKeyword.trim().toLowerCase();
+    if (!kw) return true;
+    const fields = isStore || isTeam
+      ? [row.매장명, row.매장코드, row.대리점명, row.대리점코드, row.마케팅팀, row.본부, row.주소]
+      : [row.구분, row.본부];
+    return fields.some(v => String(v||"").toLowerCase().includes(kw));
   };
+  const filteredData = teamFilteredData.filter(matchesKeyword);
+  const filteredMissingStores = teamFilteredMissingStores.filter(matchesKeyword);
+  // 필터 드롭다운의 개수 표시는 현재 보고 있는 섹션(전체 목록 vs 누락 매장) 기준이어야 한다.
+  const filterCountSource = (isStore && activeSection === "missing") ? scopedMissingStores : scopedData;
 
   // "어느 소속입니까?" 선택(uploadRegion)과 목록 필터(hqFilter)를 서로 연동한다.
-  // isStore 변형은 filterOptions.key가 본부명 그대로라 uploadRegion과 직접 일치하지만,
+  // store/team 변형은 filterOptions.key가 본부명 그대로라 uploadRegion과 직접 일치하지만,
   // hq 변형은 key가 "구분|본부" 형태라 resolveRowScope로 소속 문자열을 뽑아 매칭해야 한다.
   const deriveFilterKeyFromScope = (scope) => {
     if (!scope) return "전체";
-    if (isStore) return scope;
+    if (useSimpleScope) return scope;
     const match = filterOptions.find(o => {
       const [gu, hq] = o.key.includes("|") ? o.key.split("|") : [o.key, ""];
       return resolveRowScope(gu, hq) === scope;
@@ -4602,7 +4699,7 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
   };
   const deriveScopeFromFilterKey = (key) => {
     if (!key || key === "전체") return "";
-    if (isStore) return WIDECOLOR_UPLOAD_SCOPES.includes(key) ? key : "";
+    if (useSimpleScope) return WIDECOLOR_UPLOAD_SCOPES.includes(key) ? key : "";
     const [gu, hq] = key.includes("|") ? key.split("|") : [key, ""];
     const scope = resolveRowScope(gu, hq);
     return scope && WIDECOLOR_UPLOAD_SCOPES.includes(scope) ? scope : "";
@@ -4613,7 +4710,8 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
   };
   const handleHqFilterChange = (val) => {
     setHqFilter(val);
-    if (!isAdmin) setUploadRegion(deriveScopeFromFilterKey(val));
+    setTeamFilter("전체");
+    if (!isAdmin && !isRegionLocked) setUploadRegion(deriveScopeFromFilterKey(val));
   };
 
   const handleUpload = (e) => {
@@ -4679,6 +4777,41 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
               신규수량: qtyNum, // 이전 수량을 기본값으로 채움 (수정 가능)
             };
           });
+        } else if (isTeam) {
+          // FISO/A3 삽지 등 "팀 단위" 파일: [신매장코드(선택),마케팅본부,마케팅팀,매장명,수량] — 매장코드가 비어있는 경우가 많아
+          // 매장코드가 아닌 마케팅팀 열을 앵커로 헤더를 찾는다.
+          const norm = (s) => String(s||"").replace(/\s+/g,"");
+          const headerRowIdx = rows.findIndex(r => Array.isArray(r) && r.some(c => norm(c)==="마케팅팀"));
+          const headerRow = headerRowIdx >= 0 ? rows[headerRowIdx] : (rows[0]||[]);
+          const colIdx = (name) => headerRow.findIndex(c => norm(c)===norm(name));
+          const codeCol = colIdx("매장코드")>=0 ? colIdx("매장코드") : colIdx("신매장코드");
+          const hqCol   = colIdx("본부")>=0 ? colIdx("본부") : colIdx("마케팅본부");
+          const teamCol = colIdx("마케팅팀");
+          const nameCol = colIdx("매장명");
+          let qtyCol = ["수량","기존수량","이전수량","배송수량","신청수량","물량"].map(colIdx).find(i=>i>=0);
+          if (qtyCol === undefined) qtyCol = headerRow.length - 1;
+          const startRow = headerRowIdx >= 0 ? headerRowIdx+1 : 1;
+          const get = (r, idx) => (idx>=0 ? r[idx] : undefined);
+          const dataRows = rows.slice(startRow).filter(r => Array.isArray(r) && String(get(r,teamCol)||"").trim()!=="");
+          const rowHq = (r) => guessGtmRegion(get(r, hqCol), get(r, teamCol)) || String(get(r,hqCol)||"").trim();
+          fileHqRegions = new Set(dataRows.map(r => rowHq(r)).filter(Boolean));
+          parsed = dataRows.map((r,i) => {
+            const qty = get(r, qtyCol);
+            const qtyNum = (qty!==undefined && qty!==null && qty!=="") ? Number(qty)||0 : "";
+            const hq = isAdmin ? rowHq(r) : uploadRegion;
+            const team = String(get(r, teamCol)||"").trim();
+            const rawCode = String(get(r, codeCol)||"").trim();
+            return {
+              id: Date.now()+i,
+              구분: hq==='유통사업부' ? 'PS&M' : '지역본부',
+              본부: hq,
+              마케팅팀: team,
+              매장코드: rawCode || `${hq}_${team}`,
+              매장명: String(get(r, nameCol)||""),
+              이전수량: qtyNum,
+              신규수량: qtyNum,
+            };
+          });
         } else {
           // 헤더: Row1 = [구분,본부,이전 취합 수량,희망 수량] — 구분은 그룹 첫 행에만 존재(병합 셀), 총계 행은 본부가 비어있어 제외
           const dataRows = rows.slice(1).filter(r=>r[1]!=null);
@@ -4695,7 +4828,7 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
             };
           });
         }
-        if (isStore) {
+        if (isStore || isTeam) {
           if (isAdmin) {
             // 관리자는 여러 본부가 섞인 전체 파일을 한 번에 올릴 수 있으므로 전체 교체
             setData(parsed);
@@ -4719,7 +4852,8 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
             });
           }
           setUploadStatus({type:"success", msg:`${isAdmin ? "전체" : uploadRegion} ${parsed.length}개 항목 로드 완료`});
-          setUploadRegion(""); // 다음 업로드 때 다시 본부를 선택하도록 초기화
+          // 지역본부 전용 계정은 소속이 고정이므로 업로드 후에도 다시 선택하게 하지 않는다.
+          if (!isRegionLocked) setUploadRegion(""); // 다음 업로드 때 다시 본부를 선택하도록 초기화
         } else {
           setData(parsed);
           setUploadStatus({type:"success", msg:`${parsed.length}개 항목 로드 완료`});
@@ -4766,6 +4900,7 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
             대리점명: String(agentNameCol>=0 ? (r[agentNameCol]||"") : ""),
             구분: mktgHQ.includes('유통사업부') ? 'PS&M' : '지역본부',
             본부: guessGtmRegion(mktgHQ, team) || "-",
+            마케팅팀: team,
             확인여부: false,
             비고: "",
           };
@@ -4802,7 +4937,7 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
       const nextId = prev.reduce((m,r)=>Math.max(m, r.id||0), 0) + 1;
       return [...prev, {
         id: nextId,
-        구분: fields.구분||"", 본부: fields.본부||"", 마케팅팀: "",
+        구분: fields.구분||"", 본부: fields.본부||"", 마케팅팀: fields.마케팅팀||"",
         대리점코드: fields.대리점코드||"", 대리점명: fields.대리점명||"",
         매장코드: fields.매장코드||"", 매장명: fields.매장명||"", 주소: fields.주소||"",
         단면양면: fields.단면양면||"", 슬롯: fields.슬롯||"",
@@ -4814,14 +4949,18 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
   const downloadResult = () => {
     const header = isStore
       ? ["구분","본부","마케팅팀","대리점코드","대리점명","매장코드","매장명","주소","단면형/양면형","도광판슬롯","이전수량","신규수량"]
+      : isTeam
+      ? ["본부","마케팅팀","매장명","이전수량","신규수량"]
       : ["구분","본부","이전수량","신규수량"];
     // 이전 버전에서 문자열로 저장된 수량이 남아있을 수 있어, 내보낼 때 항상 숫자로 강제 변환한다.
     // (문자열 "1"을 그대로 내보내면 엑셀에서 텍스트로 인식되어 SUM에 포함되지 않는다.)
     const body = isStore
       ? data.map(r=>[r.구분,r.본부,r.마케팅팀,r.대리점코드,r.대리점명,r.매장코드,r.매장명,r.주소,r.단면양면,r.슬롯,Number(r.이전수량)||0,Number(r.신규수량)||0])
+      : isTeam
+      ? data.map(r=>[r.본부,r.마케팅팀,r.매장명,Number(r.이전수량)||0,Number(r.신규수량)||0])
       : data.map(r=>[r.구분,r.본부,Number(r.이전수량)||0,Number(r.신규수량)||0]);
     const ws = XLSX.utils.aoa_to_sheet([header, ...body]);
-    ws["!cols"] = (isStore ? [8,8,12,10,10,12,14,24,10,8,8,8] : [10,8,10,10]).map(w=>({wch:w}));
+    ws["!cols"] = (isStore ? [8,8,12,10,10,12,14,24,10,8,8,8] : isTeam ? [10,14,16,10,10] : [10,8,10,10]).map(w=>({wch:w}));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, sectionLabel);
     XLSX.writeFile(wb, `${sectionLabel}_수량취합.xlsx`);
@@ -4887,6 +5026,48 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
           });
           const removed = oldInRegion.filter(r => !updatesByCode.has(r.매장코드))
             .map(r=>({ key:r.매장코드, label:r.매장명, qty:r.신규수량 }));
+          setReuploadPreview({ mode:"store", regionsInFile, updatesByCode, added, removed, changed, fileName:file.name });
+        } else if (isTeam) {
+          // FISO/A3 삽지 등 "팀 단위" 포맷: [본부,마케팅팀,매장명,이전수량,신규수량] — 매장코드가 없으므로
+          // 본부+마케팅팀 조합을 키로 매칭한다.
+          const dataRows = rows.slice(1).filter(r=>r[1]);
+          const updatesByCode = new Map();
+          dataRows.forEach(r => {
+            const 본부 = String(r[0]||"").trim();
+            const 마케팅팀 = String(r[1]||"").trim();
+            if (!본부 || !마케팅팀) return;
+            const code = `${본부}_${마케팅팀}`;
+            updatesByCode.set(code, {
+              구분: 본부==='유통사업부' ? 'PS&M' : '지역본부', 본부, 마케팅팀,
+              매장코드: code, 매장명: r[2], 이전수량: Number(r[3])||0,
+              신규수량: (r[4]!==undefined && r[4]!==null && r[4]!=="") ? Number(r[4])||0 : Number(r[3])||0,
+            });
+          });
+          const regionsInFile = new Set([...updatesByCode.values()].map(f=>f.본부));
+          if (!isAdmin) {
+            const mismatched = [...regionsInFile].filter(r => r !== uploadRegion);
+            if (mismatched.length > 0) {
+              setReuploadStatus({type:"error", msg:`선택한 소속(${uploadRegion})과 다른 본부(${mismatched.join(", ")})의 데이터가 파일에 포함되어 있어 업로드를 거부했습니다. 본인 소속 파일만 업로드해주세요.`});
+              return;
+            }
+          }
+          const oldInRegion = data.filter(r => regionsInFile.has(r.본부));
+          const oldByCode = new Map(oldInRegion.map(r=>[r.매장코드, r]));
+          const added = [], changed = [];
+          updatesByCode.forEach((fields, code) => {
+            const old = oldByCode.get(code);
+            if (!old) {
+              added.push({ key:code, label:fields.마케팅팀, qty:fields.신규수량 });
+            } else {
+              const beforeQty = Number(old.신규수량)||0;
+              const afterQty = Number(fields.신규수량)||0;
+              if (beforeQty !== afterQty) {
+                changed.push({ key:code, label:fields.마케팅팀, before:beforeQty, after:afterQty });
+              }
+            }
+          });
+          const removed = oldInRegion.filter(r => !updatesByCode.has(r.매장코드))
+            .map(r=>({ key:r.매장코드, label:r.마케팅팀, qty:r.신규수량 }));
           setReuploadPreview({ mode:"store", regionsInFile, updatesByCode, added, removed, changed, fileName:file.name });
         } else {
           // 행잉배너 등 hq 포맷: [구분,본부,이전 취합 수량,희망 수량] — 구분은 그룹 첫 행에만 존재(병합 셀)
@@ -4967,7 +5148,7 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
   const rowScopeOf = (row) => {
     const opt = filterOptions.find(o => o.predicate(row));
     if (opt) return opt.key;
-    return isStore ? row.본부 : (resolveRowScope(row.구분, row.본부) || row.본부);
+    return useSimpleScope ? row.본부 : (resolveRowScope(row.구분, row.본부) || row.본부);
   };
   const isRowLocked = (row) => !isAdmin && !!unifiedSubmissions[rowScopeOf(row)]?.submitted;
 
@@ -5034,7 +5215,11 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
             : " 최초 업로드는 관리자만 가능하며, 일반 계정은 아래 \"취합 결과 업로드\"로 선택한 본부 데이터만 제출합니다."}
         </div>
         <div style={{display:"flex", gap:8, alignItems:"center", flexWrap:"wrap"}}>
-          {!isAdmin && (
+          {!isAdmin && isRegionLocked && (
+            <span style={{fontSize:12.5, fontWeight:700, color:"#1d6fa4", background:"#e8f0fb",
+              padding:"7px 12px", borderRadius:8}}>📍 {region} 소속 계정</span>
+          )}
+          {!isAdmin && !isRegionLocked && (
             <select value={uploadRegion} onChange={e=>handleUploadRegionChange(e.target.value)}
               style={{padding:"7px 12px", borderRadius:8, border:"1px solid #ddd",
                 fontSize:12.5, fontWeight:600, color: uploadRegion?"#444":"#c00", background:"#fff", cursor:"pointer"}}>
@@ -5077,7 +5262,7 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
         </div>
         {data.length > 0 && (
           <div style={{fontSize:11, color:"#aaa", marginTop:8}}>
-            {isStore
+            {useSimpleScope
               ? "\"⬇ 수량취합 엑셀 다운로드\"로 받은 파일을 그대로 수정해서 \"📤 취합 결과 업로드\"로 다시 올리면, 매장코드를 기준으로 전체 목록에 덮어써집니다 (없는 매장코드는 새로 추가됩니다). 일반 계정은 선택한 본부 데이터만 반영되고, 업로드 전 변경 내역을 확인할 수 있습니다."
               : "\"⬇ 수량취합 엑셀 다운로드\"로 받은 파일을 그대로 수정해서 \"📤 취합 결과 업로드\"로 다시 올리면, 본부를 기준으로 덮어써집니다. 일반 계정은 선택한 본부 데이터만 반영되고, 업로드 전 변경 내역을 확인할 수 있습니다."}
           </div>
@@ -5106,16 +5291,46 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
               </button>
             )}
             {filterOptions.length > 0 && (
-              <select value={hqFilter} onChange={e=>handleHqFilterChange(e.target.value)}
-                style={{marginLeft:"auto", padding:"7px 14px", borderRadius:8, border:"1px solid #ddd",
+              isRegionLocked ? (
+                <span style={{marginLeft:"auto", fontSize:12.5, fontWeight:700, color:"#1d6fa4",
+                  background:"#e8f0fb", padding:"7px 14px", borderRadius:8}}>
+                  📍 {filterOptions[0]?.label} ({filterCountSource.filter(filterOptions[0]?.predicate||(()=>true)).length})
+                </span>
+              ) : (
+                <select value={hqFilter} onChange={e=>handleHqFilterChange(e.target.value)}
+                  style={{marginLeft:"auto", padding:"7px 14px", borderRadius:8, border:"1px solid #ddd",
+                    fontSize:12.5, fontWeight:600, color:"#444", background:"#fff", cursor:"pointer"}}>
+                  <option value="전체">전체 ({filterCountSource.length})</option>
+                  {filterOptions.map(opt=>(
+                    <option key={opt.key} value={opt.key}>{opt.label} ({filterCountSource.filter(opt.predicate).length})</option>
+                  ))}
+                </select>
+              )
+            )}
+            {(isStore || isTeam) && teamOptions.length > 0 && (
+              <select value={teamFilter} onChange={e=>setTeamFilter(e.target.value)}
+                style={{padding:"7px 14px", borderRadius:8, border:"1px solid #ddd",
                   fontSize:12.5, fontWeight:600, color:"#444", background:"#fff", cursor:"pointer"}}>
-                <option value="전체">전체 ({filterCountSource.length})</option>
-                {filterOptions.map(opt=>(
-                  <option key={opt.key} value={opt.key}>{opt.label} ({filterCountSource.filter(opt.predicate).length})</option>
-                ))}
+                <option value="전체">마케팅팀 전체</option>
+                {teamOptions.map(t=>(<option key={t} value={t}>{t}</option>))}
               </select>
             )}
-            {hqFilter !== "전체" && (
+            <input
+              value={searchKeyword}
+              onChange={e=>setSearchKeyword(e.target.value)}
+              placeholder="🔍 매장명·매장코드·마케팅팀 검색"
+              style={{padding:"7px 12px", borderRadius:8, border:"1px solid #ddd", fontSize:12.5, width:200}}
+            />
+          </div>
+
+          {/* 제출/매장추가 액션바 — 필터 선택 여부와 무관하게 항상 같은 자리에 고정 표시 */}
+          <div style={{display:"flex", gap:8, alignItems:"center", flexWrap:"wrap",
+            background:"#fbfcfe", border:"1px solid #e8edf3", borderRadius:12, padding:"10px 14px"}}>
+            {hqFilter === "전체" ? (
+              <span style={{fontSize:12, color:"#999"}}>
+                ℹ️ 위에서 본부를 선택하면 제출 상태와 제출하기 버튼이 여기에 표시됩니다.
+              </span>
+            ) : (
               <>
                 {isSubmitted && (
                   <span style={{fontSize:12, fontWeight:700, color:"#2e8b57", background:"#e8f8ee",
@@ -5129,43 +5344,57 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
                     ⚠️ 누락 매장 {missingUnconfirmedCount}건 확인 필요
                   </span>
                 )}
-                <button
-                  onClick={()=>setShowSubmitConfirm(true)}
-                  disabled={isSubmitted || !canSubmit}
-                  title={!canSubmit && !isSubmitted ? "누락 매장을 모두 확인해야 제출할 수 있습니다." : undefined}
-                  style={{...settingsBtn(isSubmitted?"#bbb":(canSubmit?"#e8420a":"#ddd")), padding:"7px 18px", fontSize:12.5,
-                    cursor:(isSubmitted||!canSubmit)?"not-allowed":"pointer"}}>
-                  {isSubmitted ? "제출완료" : "제출하기"}
-                </button>
-                {isAdmin && isSubmitted && (
-                  <button onClick={handleCancelSubmit}
-                    style={{...settingsBtn("#aaa"), padding:"7px 14px", fontSize:12}}>제출 취소</button>
-                )}
-                {isStore && activeSection === "list" && (
-                  <button onClick={()=>{
-                    setAddStoreForm({ 구분:"", 본부: hqFilter!=="전체" ? hqFilter : "", 대리점코드:"", 대리점명:"", 매장코드:"", 매장명:"", 주소:"", 단면양면:"", 슬롯:"", 신청수량:"" });
-                    setShowAddStore(true);
-                  }}
-                    style={{...settingsBtn("#1d6fa4"), padding:"7px 14px", fontSize:12}}>+ 매장 추가</button>
-                )}
               </>
+            )}
+            <button
+              onClick={()=>setShowSubmitConfirm(true)}
+              disabled={hqFilter==="전체" || isSubmitted || !canSubmit}
+              title={hqFilter==="전체" ? "먼저 본부를 선택해주세요." : (!canSubmit && !isSubmitted ? "누락 매장을 모두 확인해야 제출할 수 있습니다." : undefined)}
+              style={{...settingsBtn(hqFilter==="전체"?"#ddd":(isSubmitted?"#bbb":(canSubmit?"#e8420a":"#ddd"))), padding:"7px 18px", fontSize:12.5,
+                cursor:(hqFilter==="전체"||isSubmitted||!canSubmit)?"not-allowed":"pointer"}}>
+              {isSubmitted ? "제출완료" : "제출하기"}
+            </button>
+            {isAdmin && hqFilter!=="전체" && isSubmitted && (
+              <button onClick={handleCancelSubmit}
+                style={{...settingsBtn("#aaa"), padding:"7px 14px", fontSize:12}}>제출 취소</button>
+            )}
+            {(isStore || isTeam) && (
+              <button
+                disabled={hqFilter==="전체"}
+                title={hqFilter==="전체" ? "먼저 본부를 선택해주세요." : undefined}
+                onClick={()=>{
+                  setAddStoreForm({ 구분:"", 본부: hqFilter!=="전체" ? hqFilter : "", 마케팅팀:"", 대리점코드:"", 대리점명:"", 매장코드:"", 매장명:"", 주소:"", 단면양면:"", 슬롯:"", 신청수량:"" });
+                  setShowAddStore(true);
+                }}
+                style={{...settingsBtn(hqFilter==="전체"?"#ddd":"#1d6fa4"), padding:"7px 14px", fontSize:12,
+                  cursor: hqFilter==="전체"?"not-allowed":"pointer"}}>
+                {isStore ? "+ 매장 추가" : "+ 항목 추가"}
+              </button>
             )}
           </div>
 
           {activeSection === "list" && (
             <div style={{background:"#fff", borderRadius:14, boxShadow:"0 2px 16px rgba(0,0,0,0.07)", overflow:"hidden"}}>
               <div style={{overflowX:"auto"}}>
-                <table style={{borderCollapse:"collapse", width:"100%", minWidth: isStore?900:500, fontSize:12}}>
+                <table style={{borderCollapse:"collapse", width:"100%", minWidth: isStore?960:isTeam?640:500, fontSize:12}}>
                   <thead>
                     <tr style={{background:"#f0f4f8"}}>
                       {isStore ? (
                         <>
                           <th style={tH}>#</th>
                           <th style={tH}>본부</th>
+                          <th style={{...tH, minWidth:100}}>마케팅팀</th>
                           <th style={tH}>매장코드</th>
                           <th style={{...tH, minWidth:120}}>매장명</th>
                           <th style={tH}>단면/양면</th>
                           <th style={tH}>슬롯</th>
+                        </>
+                      ) : isTeam ? (
+                        <>
+                          <th style={tH}>#</th>
+                          <th style={tH}>본부</th>
+                          <th style={{...tH, minWidth:100}}>마케팅팀</th>
+                          <th style={{...tH, minWidth:120}}>매장명</th>
                         </>
                       ) : (
                         <>
@@ -5187,6 +5416,7 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
                           <>
                             <td style={{...tD, textAlign:"center", color:"#aaa"}}>{i+1}</td>
                             <td style={{...tD, textAlign:"center"}}>{row.본부}</td>
+                            <td style={{...tD, textAlign:"center", fontSize:11, color:"#666"}}>{row.마케팅팀}</td>
                             <td style={{...tD, textAlign:"center", fontSize:11, color:"#666"}}>{row.매장코드}</td>
                             <td style={{...tD, fontWeight:600}}>{row.매장명}</td>
                             <td style={{...tD, textAlign:"center"}}>
@@ -5221,6 +5451,13 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
                                 style={{...numInput, width:56, textAlign:"center", opacity: locked?0.6:1}}
                               />
                             </td>
+                          </>
+                        ) : isTeam ? (
+                          <>
+                            <td style={{...tD, textAlign:"center", color:"#aaa"}}>{i+1}</td>
+                            <td style={{...tD, textAlign:"center"}}>{row.본부}</td>
+                            <td style={{...tD, textAlign:"center", fontWeight:600}}>{row.마케팅팀}</td>
+                            <td style={{...tD, color:"#666"}}>{row.매장명}</td>
                           </>
                         ) : (
                           <>
@@ -5261,7 +5498,7 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
                     })}
                     {/* 합계 행 */}
                     <tr style={{background:"#e8f0fb", fontWeight:700}}>
-                      <td colSpan={isStore?6:2} style={{...tD, textAlign:"right", color:"#555"}}>합 계</td>
+                      <td colSpan={isStore?7:isTeam?4:2} style={{...tD, textAlign:"right", color:"#555"}}>합 계</td>
                       <td style={{...tD, textAlign:"center", color:"#1d6fa4"}}>
                         {filteredData.reduce((s,r)=>s+(Number(r.이전수량)||0),0)}
                       </td>
@@ -5318,6 +5555,7 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
                         <tr style={{background:"#fff8f0"}}>
                           <th style={tH}>#</th>
                           <th style={tH}>본부</th>
+                          <th style={{...tH, minWidth:100}}>마케팅팀</th>
                           <th style={tH}>매장코드</th>
                           <th style={{...tH, minWidth:120}}>매장명</th>
                           <th style={{...tH, width:100}}>확인</th>
@@ -5332,6 +5570,7 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
                           <tr key={s.id ?? s.매장코드+i} style={{background:i%2===0?"#fafafa":"#fff"}}>
                             <td style={{...tD, textAlign:"center", color:"#aaa"}}>{i+1}</td>
                             <td style={{...tD, textAlign:"center"}}>{s.본부||"-"}</td>
+                            <td style={{...tD, textAlign:"center", fontSize:11, color:"#666"}}>{s.마케팅팀||"-"}</td>
                             <td style={{...tD, fontSize:11, color:"#666"}}>{s.매장코드}</td>
                             <td style={{...tD, fontWeight:600}}>{s.매장명||s.매장코드}</td>
                             <td style={{...tD, textAlign:"center"}}>
@@ -5356,7 +5595,7 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
                               <button
                                 title="매장리스트에 추가"
                                 disabled={locked}
-                                onClick={()=>addStoreRow({ 구분:s.구분, 본부:s.본부, 대리점코드:s.대리점코드, 대리점명:s.대리점명, 매장코드:s.매장코드, 매장명:s.매장명 })}
+                                onClick={()=>addStoreRow({ 구분:s.구분, 본부:s.본부, 마케팅팀:s.마케팅팀, 대리점코드:s.대리점코드, 대리점명:s.대리점명, 매장코드:s.매장코드, 매장명:s.매장명 })}
                                 style={{width:26, height:26, borderRadius:"50%", border:"none",
                                   background: locked?"#bbb":"#2e8b57",
                                   color:"#fff", fontSize:15, fontWeight:800, lineHeight:1, cursor: locked?"not-allowed":"pointer",
@@ -5380,11 +5619,13 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
       {showAddStore && (
         <div style={styles2.popupOverlay}>
           <div style={{...styles2.popupBox, minWidth:420, maxWidth:480, alignItems:"stretch", gap:10}}>
-            <div style={{fontSize:16, fontWeight:800, marginBottom:4}}>+ 매장 추가</div>
-            {[
-              ["본부","본부"], ["대리점코드","대리점코드"], ["대리점명","대리점명"],
+            <div style={{fontSize:16, fontWeight:800, marginBottom:4}}>{isStore ? "+ 매장 추가" : "+ 항목 추가"}</div>
+            {(isStore ? [
+              ["본부","본부"], ["마케팅팀","마케팅팀"], ["대리점코드","대리점코드"], ["대리점명","대리점명"],
               ["매장코드","매장코드"], ["매장명","매장명"], ["주소","주소"], ["단면양면","단면/양면"], ["슬롯","도광판슬롯"], ["신청수량","신청 수량"],
-            ].map(([field,label])=>(
+            ] : [
+              ["본부","본부"], ["마케팅팀","마케팅팀"], ["매장명","매장명(선택)"], ["신청수량","신청 수량"],
+            ]).map(([field,label])=>(
               <div key={field} style={{display:"flex", flexDirection:"column", gap:4}}>
                 <label style={{fontSize:11.5, color:"#888", fontWeight:600}}>{label}</label>
                 {field==="단면양면" ? (
@@ -5411,8 +5652,12 @@ function GTMCollectSection({ data, setData, isAdmin, submissions, setSubmissions
                 onClick={()=>setShowAddStore(false)}>취소</button>
               <button style={{...styles2.popupBtn, flex:1}}
                 onClick={()=>{
-                  if (!addStoreForm.매장코드) return;
-                  addStoreRow(addStoreForm);
+                  if (isStore && !addStoreForm.매장코드) return;
+                  if (isTeam && !addStoreForm.마케팅팀) return;
+                  const fields = isTeam
+                    ? { ...addStoreForm, 매장코드: addStoreForm.매장코드 || `${addStoreForm.본부}_${addStoreForm.마케팅팀}` }
+                    : addStoreForm;
+                  addStoreRow(fields);
                   setShowAddStore(false);
                 }}>추가</button>
             </div>
