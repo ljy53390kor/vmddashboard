@@ -4406,9 +4406,8 @@ function DatePickerCell({ value, dates, onChange, fmtDate, confirmed }) {
 const GTM_TABS = [
   { id:"widecolor",  label:"와이드컬러" },
   { id:"hanging",    label:"행잉배너" },
-  { id:"fiso",       label:"FISO" },
+  { id:"fiso",       label:"FISO(체험대백월)" },
   { id:"a3acrylic",  label:"A3 삽지" },
-  { id:"expdesk",    label:"체험대 백월" },
   { id:"largegfx",   label:"라지그래픽" },
 ];
 
@@ -4517,7 +4516,7 @@ function GTMPage({ gtmWideColorData, setGtmWideColorData, gtmHangingData, setGtm
             region={region}
             submissions={gtmSubmissions.fiso || {}}
             setSubmissions={setSectionSubmissions("fiso")}
-            sectionLabel="FISO"
+            sectionLabel="FISO(체험대백월)"
           />
         : activeTab === "a3acrylic"
         ? <GTMCollectSection
