@@ -5375,7 +5375,7 @@ function GTMCollectSection({ data, setData, isAdmin, region, submissions, setSub
           {activeSection === "list" && (
             <div style={{background:"#fff", borderRadius:14, boxShadow:"0 2px 16px rgba(0,0,0,0.07)", overflow:"hidden"}}>
               <div style={{overflowX:"auto"}}>
-                <table style={{borderCollapse:"collapse", width:"100%", minWidth: isStore?960:isTeam?640:500, fontSize:12}}>
+                <table style={{borderCollapse:"collapse", width:"100%", minWidth: isStore?960:isTeam?760:500, fontSize:12}}>
                   <thead>
                     <tr style={{background:"#f0f4f8"}}>
                       {isStore ? (
@@ -5393,6 +5393,7 @@ function GTMCollectSection({ data, setData, isAdmin, region, submissions, setSub
                           <th style={tH}>#</th>
                           <th style={tH}>본부</th>
                           <th style={{...tH, minWidth:100}}>마케팅팀</th>
+                          <th style={tH}>매장코드</th>
                           <th style={{...tH, minWidth:120}}>매장명</th>
                         </>
                       ) : (
@@ -5456,6 +5457,7 @@ function GTMCollectSection({ data, setData, isAdmin, region, submissions, setSub
                             <td style={{...tD, textAlign:"center", color:"#aaa"}}>{i+1}</td>
                             <td style={{...tD, textAlign:"center"}}>{row.본부}</td>
                             <td style={{...tD, textAlign:"center", fontWeight:600}}>{row.마케팅팀}</td>
+                            <td style={{...tD, textAlign:"center", fontSize:11, color:"#666"}}>{row.매장코드}</td>
                             <td style={{...tD, color:"#666"}}>{row.매장명}</td>
                           </>
                         ) : (
@@ -5497,7 +5499,7 @@ function GTMCollectSection({ data, setData, isAdmin, region, submissions, setSub
                     })}
                     {/* 합계 행 */}
                     <tr style={{background:"#e8f0fb", fontWeight:700}}>
-                      <td colSpan={isStore?7:isTeam?4:2} style={{...tD, textAlign:"right", color:"#555"}}>합 계</td>
+                      <td colSpan={isStore?7:isTeam?5:2} style={{...tD, textAlign:"right", color:"#555"}}>합 계</td>
                       <td style={{...tD, textAlign:"center", color:"#1d6fa4"}}>
                         {filteredData.reduce((s,r)=>s+(Number(r.이전수량)||0),0)}
                       </td>
