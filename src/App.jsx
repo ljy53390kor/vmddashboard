@@ -4428,11 +4428,12 @@ const GTM_TEAM_TO_REGION = {
 };
 function guessGtmRegion(mktgHQ, mktgTeam) {
   const hq = String(mktgHQ||"").trim();
-  if (hq.includes("유통사업부")) return "유통사업부";
+  // "유통사업부"/"유통사업본부" 등 표기가 파일마다 조금씩 다를 수 있어 "유통사업" 포함 여부로 넓게 인식한다.
+  if (hq.includes("유통사업")) return "유통사업부";
   const direct = GTM_REGIONS.find(r => hq.startsWith(r));
   if (direct) return direct;
   const team = String(mktgTeam||"").trim();
-  if (team.includes("유통사업부")) return "유통사업부";
+  if (team.includes("유통사업")) return "유통사업부";
   if (GTM_TEAM_TO_REGION[team]) return GTM_TEAM_TO_REGION[team];
   // 부산/대구 계열을 먼저 체크 (중부산·경북 등이 다른 지역명을 부분 포함하는 것 방지)
   if (team.includes("부산") || team.includes("경남") || team.includes("울산")) return "부산";
