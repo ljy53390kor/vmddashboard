@@ -5028,19 +5028,37 @@ function GTMCollectSection({ data, setData, isAdmin, region, submissions, setSub
             .map(r=>({ key:r.매장코드, label:r.매장명, qty:r.신규수량 }));
           setReuploadPreview({ mode:"store", regionsInFile, updatesByCode, added, removed, changed, fileName:file.name });
         } else if (isTeam) {
-          // FISO/A3 삽지 등 "팀 단위" 포맷: [본부,마케팅팀,매장명,이전수량,신규수량] — 매장코드가 없으므로
-          // 본부+마케팅팀 조합을 키로 매칭한다.
-          const dataRows = rows.slice(1).filter(r=>r[1]);
+          // FISO/A3 삽지 재업로드: 앱이 만든 왕복 템플릿([본부,마케팅팀,매장명,이전수량,신규수량])과
+          // 원본 소스 엑셀([신매장코드,마케팅본부,마케팅팀,매장명,수량])을 모두 헤더 이름으로 인식한다.
+          // (지역 계정이 관리자 없이 원본 파일을 그대로 재업로드하는 경우가 있어, 열 순서 고정 파싱만으로는
+          // 본부 값을 못 읽어 "소속이 아니다" 오탐이 나던 문제를 함께 해결)
+          const norm = (s) => String(s||"").replace(/\s+/g,"");
+          const headerRowIdx = rows.findIndex(r => Array.isArray(r) && r.some(c => norm(c)==="마케팅팀"));
+          const headerRow = headerRowIdx >= 0 ? rows[headerRowIdx] : (rows[0]||[]);
+          const colIdx = (name) => headerRow.findIndex(c => norm(c)===norm(name));
+          const codeCol = colIdx("매장코드")>=0 ? colIdx("매장코드") : colIdx("신매장코드");
+          const hqCol   = colIdx("본부")>=0 ? colIdx("본부") : colIdx("마케팅본부");
+          const teamCol = colIdx("마케팅팀");
+          const nameCol = colIdx("매장명");
+          const prevQtyCol = colIdx("이전수량");
+          const newQtyCol = colIdx("신규수량")>=0 ? colIdx("신규수량") : colIdx("수량");
+          const startRow = headerRowIdx >= 0 ? headerRowIdx+1 : 1;
+          const get = (r, idx) => (idx>=0 ? r[idx] : undefined);
+          const dataRows = rows.slice(startRow).filter(r => Array.isArray(r) && String(get(r,teamCol)||"").trim()!=="");
           const updatesByCode = new Map();
           dataRows.forEach(r => {
-            const 본부 = String(r[0]||"").trim();
-            const 마케팅팀 = String(r[1]||"").trim();
+            const 본부 = guessGtmRegion(get(r, hqCol), get(r, teamCol)) || String(get(r, hqCol)||"").trim();
+            const 마케팅팀 = String(get(r, teamCol)||"").trim();
             if (!본부 || !마케팅팀) return;
-            const code = `${본부}_${마케팅팀}`;
+            const rawCode = String(get(r, codeCol)||"").trim();
+            const code = rawCode || `${본부}_${마케팅팀}`;
+            const prevQty = get(r, prevQtyCol);
+            const newQty = get(r, newQtyCol);
+            const 이전수량 = (prevQty!==undefined && prevQty!==null && prevQty!=="") ? Number(prevQty)||0 : (Number(newQty)||0);
+            const 신규수량 = (newQty!==undefined && newQty!==null && newQty!=="") ? Number(newQty)||0 : 이전수량;
             updatesByCode.set(code, {
               구분: 본부==='유통사업부' ? 'PS&M' : '지역본부', 본부, 마케팅팀,
-              매장코드: code, 매장명: r[2], 이전수량: Number(r[3])||0,
-              신규수량: (r[4]!==undefined && r[4]!==null && r[4]!=="") ? Number(r[4])||0 : Number(r[3])||0,
+              매장코드: code, 매장명: get(r, nameCol), 이전수량, 신규수량,
             });
           });
           const regionsInFile = new Set([...updatesByCode.values()].map(f=>f.본부));
