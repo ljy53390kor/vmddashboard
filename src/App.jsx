@@ -5626,7 +5626,7 @@ function GTMCollectSection({ data, setData, isAdmin, region, submissions, setSub
               ["본부","본부"], ["마케팅팀","마케팅팀"], ["대리점코드","대리점코드"], ["대리점명","대리점명"],
               ["매장코드","매장코드"], ["매장명","매장명"], ["주소","주소"], ["단면양면","단면/양면"], ["슬롯","도광판슬롯"], ["신청수량","신청 수량"],
             ] : [
-              ["본부","본부"], ["마케팅팀","마케팅팀"], ["매장명","매장명(선택)"], ["신청수량","신청 수량"],
+              ["본부","본부"], ["마케팅팀","마케팅팀"], ["매장코드","매장코드(선택)"], ["매장명","매장명(선택)"], ["신청수량","신청 수량"],
             ]).map(([field,label])=>(
               <div key={field} style={{display:"flex", flexDirection:"column", gap:4}}>
                 <label style={{fontSize:11.5, color:"#888", fontWeight:600}}>{label}</label>
