@@ -5329,11 +5329,20 @@ function GTMCollectSection({ data, setData, isAdmin, region, submissions, setSub
               </button>
             )}
             {filterOptions.length > 0 && (
-              isRegionLocked ? (
+              isRegionLocked && !isMultiRegion ? (
                 <span style={{marginLeft:"auto", fontSize:12.5, fontWeight:700, color:"#1d6fa4",
                   background:"#e8f0fb", padding:"7px 14px", borderRadius:8}}>
                   📍 {filterOptions[0]?.label} ({filterCountSource.filter(filterOptions[0]?.predicate||(()=>true)).length})
                 </span>
+              ) : isRegionLocked && isMultiRegion ? (
+                <select value={hqFilter} onChange={e=>handleHqFilterChange(e.target.value)}
+                  style={{marginLeft:"auto", padding:"7px 14px", borderRadius:8, border:"1px solid #1d6fa4",
+                    fontSize:12.5, fontWeight:700, color:"#1d6fa4", background:"#e8f0fb", cursor:"pointer"}}>
+                  <option value="전체">📍 전체 ({filterCountSource.length})</option>
+                  {filterOptions.map(opt=>(
+                    <option key={opt.key} value={opt.key}>📍 {opt.label} ({filterCountSource.filter(opt.predicate).length})</option>
+                  ))}
+                </select>
               ) : (
                 <select value={hqFilter} onChange={e=>handleHqFilterChange(e.target.value)}
                   style={{marginLeft:"auto", padding:"7px 14px", borderRadius:8, border:"1px solid #ddd",
