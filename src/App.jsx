@@ -4415,6 +4415,12 @@ const GTM_TABS = [
 const GTM_REGIONS = ["수도권","부산","대구","서부","제주","중부","유통사업부"];
 // 와이드컬러 업로드 시 "어느 소속인가요?" 선택지 (제주 제외, 유통사업부 포함)
 const WIDECOLOR_UPLOAD_SCOPES = ["수도권","부산","대구","서부","중부","유통사업부"];
+// 제주는 별도 계정이 없고 서부가 관할하므로, 서부 계정은 GTM 취합 화면에서 제주 데이터도 함께 관리한다.
+const REGION_MANAGED_EXTRA = { "서부": ["제주"] };
+function getManagedRegions(region) {
+  if (!region) return [];
+  return [region, ...(REGION_MANAGED_EXTRA[region] || [])];
+}
 // 와이드컬러 "단면/양면" 값 드롭다운 선택지
 const SIDE_TYPE_OPTIONS = ["단면형","양면형","단면형/양면형"];
 const GTM_TEAM_TO_REGION = {
@@ -4574,9 +4580,12 @@ function GTMCollectSection({ data, setData, isAdmin, region, submissions, setSub
   const isTeam = variant === "team";
   // 지역본부 전용 계정(region prop 있음)은 소속을 직접 고를 필요 없이 자기 지역으로 고정된다.
   const isRegionLocked = !isAdmin && !!region && WIDECOLOR_UPLOAD_SCOPES.includes(region);
+  // 서부처럼 관할 지역(제주)이 딸린 계정은 자기 지역 + 관할 지역을 함께 관리할 수 있다.
+  const managedRegions = getManagedRegions(region);
+  const isMultiRegion = managedRegions.length > 1;
   useEffect(() => {
-    if (isRegionLocked && uploadRegion !== region) setUploadRegion(region);
-  }, [isRegionLocked, region]);
+    if (isRegionLocked && !managedRegions.includes(uploadRegion)) setUploadRegion(region);
+  }, [isRegionLocked, region, managedRegions.join(",")]);
 
   // 예전에 업로드되어 id 필드가 없는 신설 매장 리스트(레거시 데이터)를 한 번만 채워준다.
   // id가 없으면 여러 행이 undefined===undefined로 매칭되어 체크박스 등이 한꺼번에 바뀌는 문제가 생긴다.
@@ -4637,27 +4646,28 @@ function GTMCollectSection({ data, setData, isAdmin, region, submissions, setSub
         });
         return opts;
       })();
-  // 지역본부 전용 계정은 자기 소속 옵션 하나만 볼 수 있다 (다른 지역 데이터는 아예 노출되지 않음).
+  // 지역본부 전용 계정은 자기 소속(+관할 지역) 옵션만 볼 수 있다 (다른 지역 데이터는 아예 노출되지 않음).
   const filterOptions = isRegionLocked
     ? rawFilterOptions.filter(o => useSimpleScope
-        ? o.key === region
+        ? managedRegions.includes(o.key)
         : (() => {
             const [gu, hq] = o.key.includes("|") ? o.key.split("|") : [o.key, ""];
-            return resolveRowScope(gu, hq) === region;
+            return managedRegions.includes(resolveRowScope(gu, hq));
           })())
     : rawFilterOptions;
-  // 지역본부 전용 계정은 필터를 직접 고를 필요 없이 자기 소속 옵션으로 자동 고정된다.
-  const lockedFilterKey = isRegionLocked ? (filterOptions[0]?.key ?? "전체") : null;
+  // 관할 지역이 없는 지역본부 전용 계정은 필터를 직접 고를 필요 없이 자기 소속 옵션으로 자동 고정된다.
+  // (서부처럼 관할 지역이 여러 개면 필터를 직접 골라 서부/제주를 오갈 수 있어야 한다.)
+  const lockedFilterKey = (isRegionLocked && !isMultiRegion) ? (filterOptions[0]?.key ?? "전체") : null;
   useEffect(() => {
-    if (isRegionLocked && lockedFilterKey && hqFilter !== lockedFilterKey) setHqFilter(lockedFilterKey);
-  }, [isRegionLocked, lockedFilterKey]);
+    if (isRegionLocked && !isMultiRegion && lockedFilterKey && hqFilter !== lockedFilterKey) setHqFilter(lockedFilterKey);
+  }, [isRegionLocked, isMultiRegion, lockedFilterKey]);
   const selectedOption = filterOptions.find(o => o.key === hqFilter);
-  // 지역본부 전용 계정은 "전체"를 선택해도 자기 소속으로만 좁혀서 보여준다.
+  // 지역본부 전용 계정은 "전체"를 선택해도 자기 소속(+관할 지역)으로만 좁혀서 보여준다.
   const scopedData = isRegionLocked
-    ? data.filter(r => (useSimpleScope ? r.본부 === region : resolveRowScope(r.구분, r.본부) === region))
+    ? data.filter(r => (useSimpleScope ? managedRegions.includes(r.본부) : managedRegions.includes(resolveRowScope(r.구분, r.본부))))
     : data;
   const scopedMissingStores = isRegionLocked
-    ? missingStores.filter(r => r.본부 === region)
+    ? missingStores.filter(r => managedRegions.includes(r.본부))
     : missingStores;
   const hqFilteredData = hqFilter==="전체" ? scopedData : scopedData.filter(selectedOption ? selectedOption.predicate : ()=>true);
   const hqFilteredMissingStores = hqFilter==="전체" ? scopedMissingStores : scopedMissingStores.filter(selectedOption ? selectedOption.predicate : ()=>true);
@@ -4697,12 +4707,15 @@ function GTMCollectSection({ data, setData, isAdmin, region, submissions, setSub
     });
     return match ? match.key : "전체";
   };
+  // 유효한 업로드 소속인지 여부: 일반 계정은 WIDECOLOR_UPLOAD_SCOPES 기준, 관할 지역이 있는
+  // 지역본부 계정(예: 서부→제주)은 자기 소속(managedRegions)도 함께 유효하다.
+  const isValidUploadScope = (s) => WIDECOLOR_UPLOAD_SCOPES.includes(s) || managedRegions.includes(s);
   const deriveScopeFromFilterKey = (key) => {
     if (!key || key === "전체") return "";
-    if (useSimpleScope) return WIDECOLOR_UPLOAD_SCOPES.includes(key) ? key : "";
+    if (useSimpleScope) return isValidUploadScope(key) ? key : "";
     const [gu, hq] = key.includes("|") ? key.split("|") : [key, ""];
     const scope = resolveRowScope(gu, hq);
-    return scope && WIDECOLOR_UPLOAD_SCOPES.includes(scope) ? scope : "";
+    return scope && isValidUploadScope(scope) ? scope : "";
   };
   const handleUploadRegionChange = (val) => {
     setUploadRegion(val);
@@ -4711,7 +4724,7 @@ function GTMCollectSection({ data, setData, isAdmin, region, submissions, setSub
   const handleHqFilterChange = (val) => {
     setHqFilter(val);
     setTeamFilter("전체");
-    if (!isAdmin && !isRegionLocked) setUploadRegion(deriveScopeFromFilterKey(val));
+    if (!isAdmin && (!isRegionLocked || isMultiRegion)) setUploadRegion(deriveScopeFromFilterKey(val));
   };
 
   const handleUpload = (e) => {
@@ -5233,9 +5246,16 @@ function GTMCollectSection({ data, setData, isAdmin, region, submissions, setSub
             : " 최초 업로드는 관리자만 가능하며, 일반 계정은 아래 \"취합 결과 업로드\"로 선택한 본부 데이터만 제출합니다."}
         </div>
         <div style={{display:"flex", gap:8, alignItems:"center", flexWrap:"wrap"}}>
-          {!isAdmin && isRegionLocked && (
+          {!isAdmin && isRegionLocked && !isMultiRegion && (
             <span style={{fontSize:12.5, fontWeight:700, color:"#1d6fa4", background:"#e8f0fb",
               padding:"7px 12px", borderRadius:8}}>📍 {region} 소속 계정</span>
+          )}
+          {!isAdmin && isRegionLocked && isMultiRegion && (
+            <select value={uploadRegion} onChange={e=>handleUploadRegionChange(e.target.value)}
+              style={{padding:"7px 12px", borderRadius:8, border:"1px solid #1d6fa4",
+                fontSize:12.5, fontWeight:700, color:"#1d6fa4", background:"#e8f0fb", cursor:"pointer"}}>
+              {managedRegions.map(r=>(<option key={r} value={r}>📍 {r}{r===region?" (소속)":" (관할)"}</option>))}
+            </select>
           )}
           {!isAdmin && !isRegionLocked && (
             <select value={uploadRegion} onChange={e=>handleUploadRegionChange(e.target.value)}
