@@ -4963,17 +4963,17 @@ function GTMCollectSection({ data, setData, isAdmin, region, submissions, setSub
     const header = isStore
       ? ["구분","본부","마케팅팀","대리점코드","대리점명","매장코드","매장명","주소","단면형/양면형","도광판슬롯","이전수량","신규수량"]
       : isTeam
-      ? ["본부","마케팅팀","매장명","이전수량","신규수량"]
+      ? ["본부","마케팅팀","매장코드","매장명","이전수량","신규수량"]
       : ["구분","본부","이전수량","신규수량"];
     // 이전 버전에서 문자열로 저장된 수량이 남아있을 수 있어, 내보낼 때 항상 숫자로 강제 변환한다.
     // (문자열 "1"을 그대로 내보내면 엑셀에서 텍스트로 인식되어 SUM에 포함되지 않는다.)
     const body = isStore
       ? data.map(r=>[r.구분,r.본부,r.마케팅팀,r.대리점코드,r.대리점명,r.매장코드,r.매장명,r.주소,r.단면양면,r.슬롯,Number(r.이전수량)||0,Number(r.신규수량)||0])
       : isTeam
-      ? data.map(r=>[r.본부,r.마케팅팀,r.매장명,Number(r.이전수량)||0,Number(r.신규수량)||0])
+      ? data.map(r=>[r.본부,r.마케팅팀,r.매장코드,r.매장명,Number(r.이전수량)||0,Number(r.신규수량)||0])
       : data.map(r=>[r.구분,r.본부,Number(r.이전수량)||0,Number(r.신규수량)||0]);
     const ws = XLSX.utils.aoa_to_sheet([header, ...body]);
-    ws["!cols"] = (isStore ? [8,8,12,10,10,12,14,24,10,8,8,8] : isTeam ? [10,14,16,10,10] : [10,8,10,10]).map(w=>({wch:w}));
+    ws["!cols"] = (isStore ? [8,8,12,10,10,12,14,24,10,8,8,8] : isTeam ? [10,14,10,16,10,10] : [10,8,10,10]).map(w=>({wch:w}));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, sectionLabel);
     XLSX.writeFile(wb, `${sectionLabel}_수량취합.xlsx`);
