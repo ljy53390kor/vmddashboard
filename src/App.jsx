@@ -1238,7 +1238,7 @@ function SchedulePage({ role, confirmed, setConfirmed, tempSelected, setTempSele
     const key = toKey(viewYear, viewMonth, d);
     if (confirmed[key]) return; // 이미 확정된 날짜
     if (!inPeriod(viewYear, viewMonth, d)) return;
-    if (isHoliday(viewYear, viewMonth, d) || isWeekend(new Date(viewYear,viewMonth,d).getDay())) return;
+    if (isHoliday(viewYear, viewMonth, d)) return;
     setTempSelected(prev => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key); else next.add(key);
@@ -1326,7 +1326,7 @@ function SchedulePage({ role, confirmed, setConfirmed, tempSelected, setTempSele
     if (!editMode) return;
     const key = toKey(viewYear, viewMonth, d);
     const dow = new Date(viewYear,viewMonth,d).getDay();
-    if (isHoliday(viewYear,viewMonth,d)||isWeekend(dow)) return;
+    if (isHoliday(viewYear,viewMonth,d)) return;
 
     if (confirmed[key] && !editReleased.has(key)) {
       // 빨간 원 해제
@@ -1642,7 +1642,6 @@ function SchedulePage({ role, confirmed, setConfirmed, tempSelected, setTempSele
                 const isEditNew  = editMode && editNewSel.has(key);
                 const isReleased = editReleased.has(key);
                 const isHol      = isHoliday(cellY, cellM, cell.day);
-                const isWknd     = isWeekend(dow);
                 // 배송 기간: 현재 보는 달 기준 21일 ~ 다음달 20일 (인접달 포함)
                 const isPeriod   = inPeriod(cellY, cellM, cell.day);
                 const isToday    = key === toKey(today.getFullYear(), today.getMonth(), today.getDate());
@@ -1659,7 +1658,7 @@ function SchedulePage({ role, confirmed, setConfirmed, tempSelected, setTempSele
                 if ((isTemp || isEditNew) && role === "admin") circleColor = "#3b82f6";
                 if (isReleased) circleColor = "transparent";
 
-                const clickable = isCurrent && isAdmin && !isHol && !isWknd;
+                const clickable = isCurrent && isAdmin && !isHol;
                 return (
                   <div key={idx} style={{
                     ...styles.calCell,
